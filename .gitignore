@@ -1,0 +1,22 @@
+# Build output and local IDE state
+.vs/
+obj/
+x64/
+Win32/
+**/Debug/
+**/Release/
+**/LauncherRelease/
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.log
+*.binlog
+*.lastcodeanalysissucceeded
+# Local configuration and migration backups
+/*.xml*
