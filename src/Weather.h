@@ -6,6 +6,8 @@ struct HourPoint {
 	bool valid = false;
 	std::wstring temperature;
 	int code = -1;
+	// 缺失的可选数据保持空字符串，不能把 null 当作 0。
+	std::wstring uvIndex, windDirection, windSpeed, humidity, apparentTemperature, precipitationProbability;
 };
 
 struct DayForecast {

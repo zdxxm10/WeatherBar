@@ -1,4 +1,46 @@
-# v0.2.0 验证记录
+# 验证记录
+
+## 1.0 首个正式版本：悬停提示与更新检查
+
+- 工作区开始时干净；修改前 x64 的 19 组回归全部通过。
+- 新增 `Tooltip/Enabled`、`Tooltip/Fields` 可选字段，继续使用配置格式版本 2。旧文件缺项默认开启悬停，仅展示上次刷新和状态；保存仍保留其他原字段，取消/关闭回滚内存预览。
+- 7 个可选项：今日最高/最低、当前小时紫外线指数、风向、风速、相对湿度、体感温度、降水概率。风速 m/s，缺失或无效的可选值显示 `--`，不丢弃有效温度。
+- `Weather::SetURL` 在内部请求中补齐字段，设置页及 XML 地址保持简短；不改变刷新周期，不增加独立请求。
+- 布局：使用原生提示字体测量，最多两项一行，以完整刷新时间行为宽度基准；长状态由原生提示在该宽度内折行。未刷新时按完整时间格式预留宽度。
+- 已实测 Open-Meteo：默认公开示例地点的六项新字段各返回 168 个小时数据；单位与程序请求一致。
+- 已复现旧更新失败：匿名 GitHub API 返回 HTTP 403，`X-RateLimit-Remaining: 0`。同一 WinHTTP 路径加入固定官方最新发布页 HEAD 跳转备用后，API 403 情况下成功得到 `v0.2.0`，无需账户或 Token。仅接受本仓库 HTTPS 前缀及正式版本标签，不跟随任意响应地址，不下载程序。
+- 三语言回归覆盖无数据、正常、失败缓存、过期、全部可选值、关闭提示，以及每种语言 128 种勾选组合的实际字体宽度；配置读写、保存/取消、旧配置缺项、外观资源复用继续通过。
+- 最终 x64 与 Win32：各 19 组核心回归全部通过。x64 Release 单 EXE 构建通过，MSVC 静态分析无新增告警，原有 5 条保留。
+- 安装器额外验证：现存旧测试二进制先后在 x64、Win32 的退出后清理阶段返回 4294967295；重建两种架构后分别复测通过，包括图标保留、DLL 占用、目录联接保护、退出后删除 EXE 与无关文件保护。仅凭重建后通过不能确认先前失败根因，不掩盖该记录，也未修改安装器清理逻辑。
+- 已查看中文原生设置预览；原生布局测试检查三语言控件不重叠。桌面输入保护阻止继续点击更新，因此未声称完成设置按钮端到端验证。
+- 未安装到任务栏、未修改系统注册/启动项、未重启 Explorer。真实任务栏开关、跨屏 DPI、小屏滚动、PAC/直连等不同网络环境仍需人工验证。
+- 首个正式版本使用 `v1.0` 标签，程序显示 `1.0`。更新比较兼容两段和三段版本号（`1.0` 与 `1.0.0` 等价），不接受预发布或格式错误的标签。
+- 首发附件仅 `WeatherBar.exe`，SHA-256 放入发行说明，项目及图标许可证保留于源码和 EXE 内。三语言 README 同步说明下载、悬停、手动更新和兼容限制。
+
+本次修改文件：`src/AppText.h`、`src/ImportConfig.h/.cpp`、`src/Weather.h/.cpp`、`src/DeskBand.cpp`、`src/Settings.cpp`、`src/Update.h/.cpp`；`tests/CoreTests.cpp`、`tests/DisplayTests.cpp`、`tests/SettingsTests.cpp`；三语言 README 和本文，共 16 个文件。
+
+可复现命令（在 Visual Studio Developer PowerShell 中）：
+
+```powershell
+MSBuild WeatherBar.sln /m:1 /nr:false /p:Configuration=Release /p:Platform=x64 /p:RunCodeAnalysis=true /v:minimal
+MSBuild tests\RegressionTests.vcxproj /m:1 /nr:false /p:Configuration=Release /p:Platform=x64 /p:TargetName=RegressionTestsV1 /v:minimal
+.\tests\x64\Release\RegressionTestsV1.exe
+.\tests\x64\Release\RegressionTestsV1.exe --check-update
+MSBuild tests\RegressionTests.vcxproj /m:1 /nr:false /p:Configuration=Release /p:Platform=Win32 /p:TargetName=RegressionTestsV1 /v:minimal
+.\tests\Win32\Release\RegressionTestsV1.exe
+MSBuild tests\LauncherTests.vcxproj /m:1 /nr:false /p:Configuration=Release /p:Platform=x64 /v:minimal
+.\tests\x64\LauncherRelease\LauncherTests.exe
+MSBuild tests\LauncherTests.vcxproj /m:1 /nr:false /p:Configuration=Release /p:Platform=Win32 /v:minimal
+.\tests\Win32\LauncherRelease\LauncherTests.exe
+```
+
+环境：本机 Windows 10.0.26300 x64；Win32 为该系统上的 32 位程序验证，不等同于独立 32 位 Windows 或 Windows 10 传统任务栏实装验证。
+
+人工验证：备份 XML/icons 后按 README 更新；分别切换中英日，勾选全部悬停项并观察正常/失败状态折行；关闭悬停后确认不弹出；修改后取消或关闭设置确认恢复；保存后重开确认持久化；点击检查更新验证页面结果。
+
+以下为上一版的历史验证记录。
+
+# 早期开发构建验证记录（非当前发行版）
 
 ## 变更范围
 

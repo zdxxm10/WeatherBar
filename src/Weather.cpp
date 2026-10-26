@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 #include <winhttp.h>
+#include <cmath>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -274,6 +275,10 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 	if (codeKey == std::string::npos)
 		codeKey = FindKey(hourly, "weather_code", 0);
 	auto codes = ParseNumberArray(hourly, codeKey);
+	const char* extraKeys[] = { "uv_index", "wind_direction_10m", "wind_speed_10m", "relative_humidity_2m", "apparent_temperature", "precipitation_probability" };
+	std::vector<NumberValue> extras[6];
+	for (int field = 0; field < 6; ++field)
+		extras[field] = ParseNumberArray(hourly, FindKey(hourly, extraKeys[field], 0));
 	auto dayTimes = ParseInstantArray(daily, FindKey(daily, "time", 0), offsetHours);
 	auto dayMax = ParseNumberArray(daily, FindKey(daily, "temperature_2m_max", 0));
 	auto dayMin = ParseNumberArray(daily, FindKey(daily, "temperature_2m_min", 0));
@@ -341,6 +346,17 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 		EnsureDay(*day, dateKey);
 		int code = index < codes.size() && codes[index].valid ? (int)codes[index].value : -1;
 		StoreHour(*day, hour, temps[index].value, NightCode(code, hour, day->sunriseHour, day->sunsetHour));
+		HourPoint& point = day->hours[hour];
+		std::wstring* values[] = { &point.uvIndex, &point.windDirection, &point.windSpeed, &point.humidity, &point.apparentTemperature, &point.precipitationProbability };
+		for (int field = 0; field < 6; ++field) {
+			if (index >= extras[field].size() || !extras[field][index].valid) continue;
+			double value = extras[field][index].value;
+			if (!std::isfinite(value) || (field != 4 && value < 0)
+				|| (field == 1 && value > 360) || ((field == 3 || field == 5) && value > 100)) continue;
+			wchar_t formatted[384]{};
+			swprintf_s(formatted, field == 1 || field == 3 || field == 5 ? L"%.0f" : L"%.1f", value);
+			*values[field] = formatted;
+		}
 	}
 
 	NumberValue currentTemp = FirstNumber(current, "temperature_2m", "temperature");
@@ -501,6 +517,11 @@ time_t NextScheduleUtc(time_t now, int offsetHours, const int* hours, int hourCo
 
 void Weather::SetURL(std::wstring url) {
 	base = std::move(url);
+	// 展示用地址继续保持简短；附加数据与温度共用请求和刷新周期。
+	size_t hourly = base.find(L"hourly=");
+	if (hourly != std::wstring::npos)
+		base.insert(hourly + 7, L"uv_index,wind_direction_10m,wind_speed_10m,relative_humidity_2m,apparent_temperature,precipitation_probability,");
+	base += L"&wind_speed_unit=ms";
 }
 
 bool Weather::HasDay(int dateKey) const {

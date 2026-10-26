@@ -672,6 +672,10 @@ void CDeskBand::ApplyPreviewConfig(const BandConfig& incoming)
 	NormalizeBandConfig(next);
 	bool dataChanged = next.url != config.url || next.timezoneOffsetHours != config.timezoneOffsetHours;
 	config = std::move(next);
+	if (tooltipHwnd) {
+		SendMessageW(tooltipHwnd, TTM_POP, 0, 0);
+		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled, 0);
+	}
 	if (dataChanged) ++generation;
 	_weather.SetURL(config.url);
 	// 预览仅改内存，字体和 SVG 仍按实际像素变化复用；保存是唯一的落盘入口。
@@ -719,7 +723,7 @@ void CDeskBand::OnCreate(HWND hwnd)
 		tool.uId = reinterpret_cast<UINT_PTR>(hwnd);
 		tool.lpszText = LPSTR_TEXTCALLBACKW;
 		SendMessageW(tooltipHwnd, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
-		SendMessageW(tooltipHwnd, TTM_SETMAXTIPWIDTH, 0, 440);
+		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled, 0);
 		SendMessageW(tooltipHwnd, TTM_SETDELAYTIME, TTDT_AUTOPOP, 15000);
 	}
 	UpdateDpi(hwnd);
@@ -1369,9 +1373,9 @@ void CDeskBand::OnWeather(FetchResult* result)
 		ShowNotice(m_hwnd, config.language,
 			Text(config.language, L"未能获取天气", L"Weather is unavailable", L"天気を取得できませんでした"),
 			Text(config.language,
-				L"请检查网络及设置中的 Open-Meteo 地址。\n\n已有温度会暂时保留。悬停天气条可查看最近成功获取时间。",
-				L"Check your connection and the Open-Meteo URL in settings.\n\nExisting temperatures are kept. Hover over the bar to see the last successful fetch time.",
-				L"接続と設定内の Open-Meteo URL を確認してください。\n\n以前の気温は保持します。バーにマウスを重ねると、最後に取得できた日時を確認できます。"));
+				L"请检查网络及设置中的 Open-Meteo 地址。\n\n已有温度会暂时保留。开启悬停提示后可查看上次刷新和状态。",
+				L"Check your connection and the Open-Meteo URL in settings.\n\nExisting temperatures are kept. Enable the tooltip to see last refresh and status.",
+				L"接続と設定内の Open-Meteo URL を確認してください。\n\n以前の気温は保持します。ツールチップを有効にすると、最終更新と状態を確認できます。"));
 	}
 	bool again = followUp;
 	followUp = false;
@@ -1382,32 +1386,72 @@ void CDeskBand::OnWeather(FetchResult* result)
 }
 
 std::wstring CDeskBand::BuildTooltip() const {
+	if (!config.tooltipEnabled) return L"";
 	auto T = [&](const wchar_t* zh, const wchar_t* en, const wchar_t* ja) { return Text(config.language, zh, en, ja); };
 	time_t now = time(nullptr);
 	const DayForecast* day = _weather.FindDay(DateKeyFromUtc(now, config.timezoneOffsetHours));
 	tm local{};
-	BreakLocalTime(now, config.timezoneOffsetHours, local);
-	std::wstring temperature = L"--";
-	if (day && local.tm_hour >= 0 && local.tm_hour < 24 && day->hours[local.tm_hour].valid)
-		temperature = day->hours[local.tm_hour].temperature;
-	std::wostringstream text;
-	text << T(L"当前小时预报：", L"Current-hour forecast: ", L"現在の時間帯の予報：") << temperature;
-	if (day)
-		text << L"\n" << T(L"今日最高 / 最低：", L"Today's high / low: ", L"今日の最高・最低：")
-			<< (day->maxTemperature.empty() ? L"--" : day->maxTemperature) << L" / "
-			<< (day->minTemperature.empty() ? L"--" : day->minTemperature);
+	const HourPoint* hour = day && BreakLocalTime(now, config.timezoneOffsetHours, local) ? &day->hours[local.tm_hour] : nullptr;
+	auto value = [](const std::wstring& number, const wchar_t* unit = L"") { return number.empty() ? std::wstring(L"--") : number + unit; };
+	std::wstring refreshLabel = T(L"上次刷新：", L"Last refresh: ", L"最終更新：");
+	std::wstring stamp = L"--";
 	if (lastSuccessfulFetch && BreakLocalTime(lastSuccessfulFetch, config.timezoneOffsetHours, local)) {
-		wchar_t stamp[80]{};
-		swprintf_s(stamp, L"%04d-%02d-%02d %02d:%02d (UTC%+d)", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, config.timezoneOffsetHours);
-		text << L"\n" << T(L"最近成功获取：", L"Last successful fetch: ", L"最終取得：") << stamp;
+		wchar_t buffer[80]{};
+		swprintf_s(buffer, L"%04d-%02d-%02d %02d:%02d (UTC%+d)", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, config.timezoneOffsetHours);
+		stamp = buffer;
 	}
-	text << L"\n";
-	if (inFlight) text << T(L"正在更新…", L"Updating…", L"更新中…");
-	else if (!_weather.cache.hasData) text << T(L"尚未获取到天气。", L"No weather data yet.", L"天気データはまだありません。");
-	else if (!day || now - lastSuccessfulFetch > 8 * 3600) text << T(L"预报可能已过期，请刷新。", L"The forecast may be stale. Refresh to update.", L"予報が古くなっている可能性があります。更新してください。");
-	else if (lastFetchFailed) text << T(L"更新失败，正在使用上次预报。", L"Update failed. Using the previous forecast.", L"更新に失敗しました。前回の予報を表示しています。");
-	else text << T(L"状态：正常", L"Status: up to date", L"状態：正常");
-	return text.str();
+	std::wstring refresh = refreshLabel + stamp;
+	std::wstring direction = L"--";
+	if (hour && !hour->windDirection.empty()) {
+		const wchar_t* zh[] = { L"北风", L"东北风", L"东风", L"东南风", L"南风", L"西南风", L"西风", L"西北风" };
+		const wchar_t* en[] = { L"N", L"NE", L"E", L"SE", L"S", L"SW", L"W", L"NW" };
+		const wchar_t* ja[] = { L"北", L"北東", L"東", L"南東", L"南", L"南西", L"西", L"北西" };
+		int index = static_cast<int>((_wtoi(hour->windDirection.c_str()) + 22.5) / 45) % 8;
+		direction = T(zh[index], en[index], ja[index]);
+	}
+	std::wstring fields[] = {
+		std::wstring(T(L"今日最高 / 最低：", L"High / low: ", L"最高・最低：")) + (day ? value(day->maxTemperature) + L" / " + value(day->minTemperature) : L"-- / --"),
+		std::wstring(T(L"紫外线指数：", L"UV index: ", L"紫外線指数：")) + (hour ? value(hour->uvIndex) : L"--"),
+		std::wstring(T(L"风向：", L"Wind direction: ", L"風向：")) + direction,
+		std::wstring(T(L"风速：", L"Wind speed: ", L"風速：")) + (hour ? value(hour->windSpeed, L" m/s") : L"--"),
+		std::wstring(T(L"相对湿度：", L"Humidity: ", L"相対湿度：")) + (hour ? value(hour->humidity, L"%") : L"--"),
+		std::wstring(T(L"体感温度：", L"Feels like: ", L"体感温度：")) + (hour ? value(hour->apparentTemperature, L"℃") : L"--"),
+		std::wstring(T(L"降水概率：", L"Rain chance: ", L"降水確率：")) + (hour ? value(hour->precipitationProbability, L"%") : L"--")
+	};
+	// 使用提示窗口的真实字体测量，避免以字符数估计中英日文宽度。
+	HDC dc = GetDC(tooltipHwnd);
+	HFONT font = tooltipHwnd ? reinterpret_cast<HFONT>(SendMessageW(tooltipHwnd, WM_GETFONT, 0, 0)) : nullptr;
+	HGDIOBJ previous = dc ? SelectObject(dc, font ? font : GetStockObject(DEFAULT_GUI_FONT)) : nullptr;
+	auto width = [&](const std::wstring& text) {
+		SIZE size{};
+		if (dc) GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+		return size.cx;
+	};
+	int limit = width(stamp == L"--" ? refreshLabel + L"2000-01-01 00:00 (UTC+14)" : refresh);
+	std::wstring text, row;
+	int count = 0;
+	for (int field = 0; field < 7; ++field) {
+		if (!(config.tooltipFields & (1u << field))) continue;
+		std::wstring combined = row.empty() ? fields[field] : row + L"    " + fields[field];
+		if (!row.empty() && (count == 2 || width(combined) > limit)) {
+			text += row + L"\n"; row.clear(); count = 0;
+		}
+		if (!row.empty()) row += L"    ";
+		row += fields[field]; ++count;
+	}
+	if (!row.empty()) text += row + L"\n";
+	if (tooltipHwnd) SendMessageW(tooltipHwnd, TTM_SETMAXTIPWIDTH, 0, limit + 2);
+	if (dc) {
+		if (previous && previous != HGDI_ERROR) SelectObject(dc, previous);
+		ReleaseDC(tooltipHwnd, dc);
+	}
+	text += refresh + L"\n" + T(L"状态：", L"Status: ", L"状態：");
+	if (inFlight) text += T(L"正在更新…", L"Updating…", L"更新中…");
+	else if (!_weather.cache.hasData) text += T(L"尚未获取到天气", L"No weather data yet", L"天気データはまだありません");
+	else if (!day || now - lastSuccessfulFetch > 8 * 3600) text += T(L"预报可能已过期，请刷新", L"Forecast may be stale; refresh", L"予報が古い可能性があります。更新してください");
+	else if (lastFetchFailed) text += T(L"刷新失败，使用上次预报", L"Failed; using previous forecast", L"更新失敗。前回の予報を表示中");
+	else text += T(L"正常", L"Up to date", L"正常");
+	return text;
 }
 
 void CDeskBand::HookParent(HWND parent)

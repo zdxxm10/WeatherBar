@@ -15,13 +15,14 @@ enum ControlId {
 	IDC_SHOW_ICON, IDC_ICON_SIZE, IDC_GAP_ICON, IDC_GAP_EXT,
 	IDC_CUR_SIZE, IDC_CUR_COLOR, IDC_SHOW_MAX, IDC_MAX_SIZE, IDC_MAX_COLOR,
 	IDC_SHOW_MIN, IDC_MIN_SIZE, IDC_MIN_COLOR,
-	IDC_SAVE, IDC_CANCEL, IDC_RESET, IDC_CHECK_UPDATE, IDC_RELEASES, IDC_UPDATE_STATUS
+	IDC_SAVE, IDC_CANCEL, IDC_RESET, IDC_CHECK_UPDATE, IDC_RELEASES, IDC_UPDATE_STATUS,
+	IDC_TOOLTIP = 140, IDC_TOOLTIP_FIRST, IDC_TOOLTIP_LAST = IDC_TOOLTIP_FIRST + 6
 };
 constexpr UINT_PTR kUpdateTimer = 1;
 constexpr UINT_PTR kPreviewTimer = 2;
 constexpr UINT kColorChanged = WM_APP + 20;
 constexpr int kClientWidth = 520;
-constexpr int kContentHeight = 618;
+constexpr int kContentHeight = 822;
 
 struct SettingsState {
 	CDeskBand* band = nullptr;
@@ -118,6 +119,13 @@ void ReadAppearance(HWND hwnd, BandConfig& draft) {
 	draft.showIcon = Button_GetCheck(GetDlgItem(hwnd, IDC_SHOW_ICON)) == BST_CHECKED;
 	draft.showMax = Button_GetCheck(GetDlgItem(hwnd, IDC_SHOW_MAX)) == BST_CHECKED;
 	draft.showMin = Button_GetCheck(GetDlgItem(hwnd, IDC_SHOW_MIN)) == BST_CHECKED;
+	draft.tooltipEnabled = Button_GetCheck(GetDlgItem(hwnd, IDC_TOOLTIP)) == BST_CHECKED;
+	draft.tooltipFields = 0;
+	for (int field = 0; field < 7; ++field) {
+		HWND check = GetDlgItem(hwnd, IDC_TOOLTIP_FIRST + field);
+		if (Button_GetCheck(check) == BST_CHECKED) draft.tooltipFields |= 1u << field;
+		EnableWindow(check, draft.tooltipEnabled);
+	}
 	draft.iconLevel = ReadLevel(hwnd, IDC_ICON_SIZE);
 	draft.currentLevel = ReadLevel(hwnd, IDC_CUR_SIZE);
 	draft.maxLevel = ReadLevel(hwnd, IDC_MAX_SIZE);
@@ -396,7 +404,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	case WM_PAINT: {
 		PAINTSTRUCT paint{}; HDC dc = BeginPaint(hwnd, &paint);
 		RECT client{}; GetClientRect(hwnd, &client);
-		for (auto range : { std::pair<int, int>{10, 160}, {166, 366}, {370, 474}, {478, 566} }) {
+		for (auto range : { std::pair<int, int>{10, 160}, {166, 366}, {370, 474}, {478, 674}, {682, 770} }) {
 			RECT panel{ Scale(state, 12), Scale(state, range.first) - state->scroll, client.right - Scale(state, 12), Scale(state, range.second) - state->scroll };
 			HGDIOBJ oldBrush = SelectObject(dc, state->panelBrush);
 			HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -443,7 +451,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				ReadAppearance(hwnd, state->draft);
 				RefreshLanguage(hwnd, state);
 			}
-			if (LOWORD(wp) == IDC_LANGUAGE || (LOWORD(wp) >= IDC_SHOW_ICON && LOWORD(wp) <= IDC_MIN_COLOR)) PreviewSettings(hwnd, state);
+			if (LOWORD(wp) == IDC_LANGUAGE || (LOWORD(wp) >= IDC_SHOW_ICON && LOWORD(wp) <= IDC_MIN_COLOR)
+				|| (LOWORD(wp) >= IDC_TOOLTIP && LOWORD(wp) <= IDC_TOOLTIP_LAST)) PreviewSettings(hwnd, state);
 		}
 		if (HIWORD(wp) == EN_CHANGE && (LOWORD(wp) == IDC_URL || LOWORD(wp) == IDC_TZ))
 			if (!SetTimer(hwnd, kPreviewTimer, 350, nullptr)) PreviewSettings(hwnd, state);
@@ -481,7 +490,11 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			case UpdateStatus::Available: message = Text(state->language, L"发现新版本：", L"New version: ", L"新しいバージョン：") + state->update->latestVersion; break;
 			case UpdateStatus::Current: message = Text(state->language, L"当前已是最新正式版本。", L"You have the latest stable version.", L"最新の正式バージョンです。"); break;
 			case UpdateStatus::NoRelease: message = Text(state->language, L"尚无正式发布版本。", L"No stable release has been published.", L"正式リリースはまだありません。"); break;
-			default: message = Text(state->language, L"检查失败，请检查网络或稍后重试。", L"Check failed. Check your connection or try later.", L"確認に失敗しました。接続を確認するか、後でもう一度お試しください。"); break;
+			default:
+				message = Text(state->language, L"检查失败，可打开发布页。", L"Check failed. Open the release page.", L"確認失敗。リリースページをご覧ください。");
+				if (state->update->errorCode) message += L" (WinHTTP " + std::to_wstring(state->update->errorCode) + L")";
+				else if (state->update->httpStatus) message += L" (HTTP " + std::to_wstring(state->update->httpStatus) + L")";
+				break;
 			}
 			SetControlText(hwnd, IDC_UPDATE_STATUS, message);
 			state->update.reset();
@@ -637,15 +650,34 @@ HWND ShowBandSettings(HWND owner, CDeskBand* band, const BandConfig& current) {
 	sizeCombo(IDC_GAP_ICON, 406, current.gapIconLevel);
 	label({ L"当前温度与高低温", L"Temperature to high / low", L"気温と最高・最低気温" }, 20, 440, 260);
 	sizeCombo(IDC_GAP_EXT, 440, current.gapExtremeLevel);
-	section({ L"关于与更新", L"About & updates", L"このアプリについて" }, 484);
+	section({ L"悬停提示", L"Hover tooltip", L"ツールチップ" }, 484);
+	HWND hover = control(L"BUTTON", { L"开启悬停提示", L"Enable tooltip", L"ツールチップを表示" }, WS_TABSTOP | BS_AUTOCHECKBOX, IDC_TOOLTIP, 20, 514, 480, 24);
+	Button_SetCheck(hover, current.tooltipEnabled ? BST_CHECKED : BST_UNCHECKED);
+	label({ L"底部固定显示：上次刷新、状态", L"Always at bottom: last refresh, status", L"最下部に常に表示：最終更新・状態" }, 20, 542, 480);
+	SettingsState::LocalText tooltipLabels[] = {
+		{ L"今日最高 / 最低", L"Today's high / low", L"今日の最高・最低" },
+		{ L"紫外线指数", L"UV index", L"紫外線指数" },
+		{ L"风向", L"Wind direction", L"風向" },
+		{ L"风速", L"Wind speed", L"風速" },
+		{ L"相对湿度", L"Relative humidity", L"相対湿度" },
+		{ L"体感温度", L"Feels like", L"体感温度" },
+		{ L"降水概率", L"Precipitation chance", L"降水確率" }
+	};
+	for (int field = 0; field < 7; ++field) {
+		HWND check = control(L"BUTTON", tooltipLabels[field], WS_TABSTOP | BS_AUTOCHECKBOX,
+			IDC_TOOLTIP_FIRST + field, field % 2 ? 266 : 20, 572 + field / 2 * 24, 234, 24);
+		Button_SetCheck(check, current.tooltipFields & (1u << field) ? BST_CHECKED : BST_UNCHECKED);
+		EnableWindow(check, current.tooltipEnabled);
+	}
+	section({ L"关于与更新", L"About & updates", L"このアプリについて" }, 688);
 	std::wstring version = std::wstring(L"WeatherBar  ") + kAppVersion;
-	AddControl(hwnd, L"STATIC", version.c_str(), SS_LEFT | SS_CENTERIMAGE, -1, S(20), S(516), S(220), S(24), state->font);
-	control(L"BUTTON", { L"检查更新", L"Check updates", L"更新を確認" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_CHECK_UPDATE, 292, 512, 100, 30);
-	control(L"BUTTON", { L"发布页面", L"Release page", L"リリースページ" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_RELEASES, 404, 512, 96, 30);
-	label({ L"", L"", L"" }, 20, 544, 480, IDC_UPDATE_STATUS);
-	control(L"BUTTON", { L"恢复默认", L"Reset appearance", L"外観を初期化" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_RESET, 20, 572, 142, 30);
-	control(L"BUTTON", { L"保存", L"Save", L"保存" }, WS_TABSTOP | BS_DEFPUSHBUTTON, IDC_SAVE, 300, 572, 92, 30);
-	control(L"BUTTON", { L"取消", L"Cancel", L"キャンセル" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_CANCEL, 408, 572, 92, 30);
+	AddControl(hwnd, L"STATIC", version.c_str(), SS_LEFT | SS_CENTERIMAGE, -1, S(20), S(720), S(220), S(24), state->font);
+	control(L"BUTTON", { L"检查更新", L"Check updates", L"更新を確認" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_CHECK_UPDATE, 292, 716, 100, 30);
+	control(L"BUTTON", { L"发布页面", L"Release page", L"リリースページ" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_RELEASES, 404, 716, 96, 30);
+	label({ L"", L"", L"" }, 20, 748, 480, IDC_UPDATE_STATUS);
+	control(L"BUTTON", { L"恢复默认", L"Reset appearance", L"外観を初期化" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_RESET, 20, 776, 142, 30);
+	control(L"BUTTON", { L"保存", L"Save", L"保存" }, WS_TABSTOP | BS_DEFPUSHBUTTON, IDC_SAVE, 300, 776, 92, 30);
+	control(L"BUTTON", { L"取消", L"Cancel", L"キャンセル" }, WS_TABSTOP | BS_PUSHBUTTON, IDC_CANCEL, 408, 776, 92, 30);
 	SetControlText(hwnd, IDC_URL, current.url);
 	SetControlText(hwnd, IDC_TZ, std::to_wstring(current.timezoneOffsetHours));
 	SendDlgItemMessageW(hwnd, IDC_URL, EM_SETLIMITTEXT, 2048, 0);

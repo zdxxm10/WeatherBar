@@ -215,6 +215,14 @@ void ApplyElement(const std::wstring& parent, const std::wstring& name, const At
 	}
 	if (!attrs.has)
 		return;
+	if (parent == L"Tooltip") {
+		if (name == L"Enabled") ParseBool(attrs.value, config.tooltipEnabled);
+		if (name == L"Fields") {
+			int fields = 0;
+			if (TryInt(attrs.value, fields) && fields >= 0) config.tooltipFields = fields & 127u;
+		}
+		return;
+	}
 
 	const bool data = Same(parent, kData, L"数据");
 	const bool icon = Same(parent, kIcon, L"图标");
@@ -308,6 +316,8 @@ std::wstring BuildConfigXml(const BandConfig& config) {
 	xml << L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n";
 	xml << L"<WeatherBar version=\"" << kConfigSchemaVersion << L"\">\r\n";
 	xml << L"  <General><Language value=\"" << LanguageCode(config.language) << L"\"/></General>\r\n";
+	xml << L"  <Tooltip><Enabled value=\"" << (config.tooltipEnabled ? 1 : 0)
+		<< L"\"/><Fields value=\"" << (config.tooltipFields & 127u) << L"\"/></Tooltip>\r\n";
 	xml << L"  <" << kData << L">\r\n";
 	xml << L"    <!-- Open-Meteo \u63a5\u53e3\u5730\u5740\u3002\u65f6\u95f4\u683c\u5f0f\u987b\u4e3a unixtime\uff0c\u5e76\u5305\u542b\u9010\u5c0f\u65f6\u6e29\u5ea6\u3001\u5929\u6c14\u4ee3\u7801\uff0c\u4ee5\u53ca\u6bcf\u65e5\u6700\u9ad8\u6e29\u3001\u6700\u4f4e\u6e29\u3001\u65e5\u51fa\u548c\u65e5\u843d\u3002 -->\r\n";
 	xml << L"    <!-- \u5730\u5740\u91cc\u7684 timezone \u8981\u548c\u4e0b\u9762\u7684\u65f6\u533a\u504f\u79fb\u4e00\u81f4\uff0c\u5426\u5219\u8de8\u5348\u591c\u5207\u6362\u7684\u65e5\u671f\u4f1a\u4e0d\u51c6\u3002 -->\r\n";

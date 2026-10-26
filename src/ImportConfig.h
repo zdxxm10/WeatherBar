@@ -53,6 +53,9 @@ struct BandConfig {
 	std::vector<int> scheduleHours;
 	int delaySeconds = kDefaultDelaySeconds;
 	bool showIcon = true;
+	bool tooltipEnabled = true;
+	// 位 0 为今日高低温，随后依次为紫外线、风向、风速、湿度、体感、降水概率。
+	unsigned tooltipFields = 0;
 	SizeLevel iconLevel = SizeLevel::Medium;
 	SizeLevel currentLevel = SizeLevel::Large;
 	COLORREF currentColor = RGB(255, 255, 255);

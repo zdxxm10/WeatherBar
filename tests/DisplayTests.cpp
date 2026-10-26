@@ -67,6 +67,11 @@ void TestTooltipAndRequestGeneration() {
 	Require(band.CurrentConfig().url == original.url && band._weather.cache.days[0].maxTemperature == L"original" && band.generation > previewGeneration, "rollback restores location, cached weather and rejects preview requests");
 	band._weather.cache = {};
 	band.config.language = Language::English;
+	band.config.tooltipEnabled = true;
+	band.config.tooltipFields = 0;
+	band.tooltipHwnd = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_NOPREFIX,
+		0, 0, 0, 0, nullptr, nullptr, g_hinstDll, nullptr);
+	Require(band.tooltipHwnd != nullptr, "native tooltip window for actual font measurements");
 	Require(band.BuildTooltip().find(L"No weather data yet") != std::wstring::npos, "empty hover state");
 	time_t now = time(nullptr);
 	tm local{};
@@ -79,7 +84,44 @@ void TestTooltipAndRequestGeneration() {
 	band._weather.cache.hasData = true;
 	band.lastSuccessfulFetch = now;
 	std::wstring tooltip = band.BuildTooltip();
-	Require(tooltip.find(L"23.5℃") != std::wstring::npos && tooltip.find(L"Last successful fetch") != std::wstring::npos, "hover shows current forecast and success timestamp");
+	Require(tooltip.find(L"23.5℃") == std::wstring::npos && tooltip.find(L"Last refresh") != std::wstring::npos, "hover removes repeated forecast and renames refresh timestamp");
+	Require(tooltip.find(L"High / low") == std::wstring::npos && std::count(tooltip.begin(), tooltip.end(), L'\n') == 1, "default hover only includes refresh and status");
+	band.config.tooltipEnabled = false;
+	Require(band.BuildTooltip().empty(), "disabled tooltip has no content");
+	band.config.tooltipEnabled = true;
+	band.config.tooltipFields = 127;
+	auto& point = day.hours[local.tm_hour];
+	point.uvIndex = L"6.2"; point.windDirection = L"45"; point.windSpeed = L"3.5";
+	point.humidity = L"65"; point.apparentTemperature = L"24.0"; point.precipitationProbability = L"30";
+	for (Language language : { Language::Chinese, Language::English, Language::Japanese }) {
+		band.config.language = language;
+		tooltip = band.BuildTooltip();
+		Require(tooltip.find(L"6.2") != std::wstring::npos && tooltip.find(L"3.5 m/s") != std::wstring::npos
+			&& tooltip.find(L"65%") != std::wstring::npos && tooltip.find(L"24.0℃") != std::wstring::npos
+			&& tooltip.find(L"30%") != std::wstring::npos, "all optional values in each language");
+		Require(std::count(tooltip.begin(), tooltip.end(), L'\n') <= 8, "hover height is bounded");
+		HDC dc = GetDC(band.tooltipHwnd);
+		HFONT font = reinterpret_cast<HFONT>(SendMessageW(band.tooltipHwnd, WM_GETFONT, 0, 0));
+		HGDIOBJ previous = SelectObject(dc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
+		auto measure = [&](const std::wstring& text) { SIZE size{}; GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size); return size.cx; };
+		// 穷举全部勾选组合，保证可选行不超过时间行的实际像素宽度。
+		for (unsigned mask = 0; mask < 128; ++mask) {
+			band.config.tooltipFields = mask;
+			std::wstring text = band.BuildTooltip();
+			size_t status = text.rfind(L'\n');
+			size_t refresh = text.rfind(L'\n', status - 1);
+			size_t start = refresh == std::wstring::npos ? 0 : refresh + 1;
+			int limit = measure(text.substr(start, status - start));
+			for (size_t row = 0; row < start;) {
+				size_t end = text.find(L'\n', row);
+				Require(measure(text.substr(row, end - row)) <= limit, "optional tooltip rows fit timestamp width in all languages");
+				row = end + 1;
+			}
+		}
+		SelectObject(dc, previous); ReleaseDC(band.tooltipHwnd, dc);
+		band.config.tooltipFields = 127;
+	}
+	band.config.language = Language::English;
 	band.lastFetchFailed = true;
 	Require(band.BuildTooltip().find(L"previous forecast") != std::wstring::npos, "failure uses cached state");
 	band.lastSuccessfulFetch = now - 9 * 3600;

@@ -4,11 +4,15 @@ Lightweight weather for the classic Windows taskbar.
 
 [简体中文](README.md) | **English** | [日本語](README.ja.md)
 
+**Current version: 1.0** · [First stable release](https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0) · [Download WeatherBar.exe](https://github.com/zdxxm10/WeatherBar/releases/download/v1.0/WeatherBar.exe)
+
 ## Install
 
 Download `WeatherBar.exe` from [Releases](https://github.com/zdxxm10/WeatherBar/releases/latest), put it in a writable dedicated folder and run it. The EXE contains the DLL and icons. Allow Windows to display the toolbar, or enable WeatherBar in the classic taskbar's Toolbars menu. Installation registers the component and startup entry for the current user.
 
 The release targets x64 Windows 10 classic taskbars. The native Windows 11 taskbar does not support DeskBands. Other classic taskbar implementations and 32-bit installation are not verified.
+
+Only the EXE is needed from the release page; it includes the DLL, icons and licenses. The release notes list its SHA-256 checksum, so no separate checksum or license TXT download is required. Source license links are below.
 
 ## Settings
 
@@ -20,7 +24,7 @@ Appearance and language changes preview immediately. Click a color button for sw
 
 Languages: Simplified Chinese, English and Japanese. System default maps all Chinese regions to Simplified Chinese, Japanese to Japanese, and others to English. Install/uninstall always follows the system independently of the setting.
 
-Forecasts refresh at local 00/06/12/18 hours with a default 15-minute stagger (`StaggerSeconds`, 0–1800). Hover for forecast and fetch status. Check updates contacts GitHub only when clicked; it never downloads or installs updates automatically.
+Forecasts refresh at local 00/06/12/18 hours with a default 15-minute stagger (`StaggerSeconds`, 0–1800). The optional hover tooltip always ends with last refresh and status. Select daily high/low, hourly UV index, wind direction/speed, relative humidity, feels-like temperature and precipitation chance individually (all off by default). Missing values show `--`; up to two items share a row based on measured text width. Tooltip changes preview immediately and roll back on Cancel. Additional weather fields share the existing request and refresh schedule; wind speed uses m/s. Check updates contacts GitHub only when clicked; it never downloads or installs updates automatically. If the API fails, it checks the official latest-release redirect for this repository; failures report an HTTP or WinHTTP code.
 
 ## Update / uninstall
 

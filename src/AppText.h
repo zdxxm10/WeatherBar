@@ -7,7 +7,7 @@
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 enum class Language { System, Chinese, English, Japanese };
-inline constexpr wchar_t kAppVersion[] = L"0.2.0";
+inline constexpr wchar_t kAppVersion[] = L"1.0";
 inline constexpr wchar_t kReleasePage[] = L"https://github.com/zdxxm10/WeatherBar/releases";
 
 inline Language LanguageForLocale(const std::wstring& locale) {

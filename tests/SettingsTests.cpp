@@ -77,6 +77,12 @@ void TestSettingsBehavior() {
 		GetWindowTextW(hwnd, title, 128);
 		Require(std::wstring(title) == L"Weather settings" && band.CurrentConfig().language == Language::English, "language immediately changes the same window and band");
 		Require(ReadConfigBytes() == before, "language preview is not persisted");
+		Button_SetCheck(GetDlgItem(hwnd, IDC_TOOLTIP_FIRST + 3), BST_CHECKED);
+		SendMessageW(hwnd, WM_COMMAND, IDC_TOOLTIP_FIRST + 3, 0);
+		Require(band.CurrentConfig().tooltipFields == 8 && ReadConfigBytes() == before, "tooltip selection previews without writing");
+		Button_SetCheck(GetDlgItem(hwnd, IDC_TOOLTIP), BST_UNCHECKED);
+		SendMessageW(hwnd, WM_COMMAND, IDC_TOOLTIP, 0);
+		Require(!band.CurrentConfig().tooltipEnabled && !IsWindowEnabled(GetDlgItem(hwnd, IDC_TOOLTIP_FIRST)), "disabled tooltip disables optional controls");
 		SendDlgItemMessageW(hwnd, IDC_LANGUAGE, CB_SETCURSEL, static_cast<int>(language), 0);
 		SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDC_LANGUAGE, CBN_SELCHANGE), 0);
 		SendMessageW(hwnd, WM_COMMAND, IDC_CUR_COLOR, 0);
@@ -110,11 +116,14 @@ void TestSettingsBehavior() {
 		Require(ReadConfigBytes() == before, "reset is not persisted until save");
 		SendMessageW(hwnd, WM_COMMAND, IDC_CANCEL, 0);
 		Require(!IsWindow(hwnd) && ReadConfigBytes() == before, "cancel discards draft");
+		Require(band.CurrentConfig().tooltipEnabled == original.tooltipEnabled && band.CurrentConfig().tooltipFields == original.tooltipFields, "cancel restores tooltip settings");
 		Require(band.CurrentConfig().language == language && band.CurrentConfig().showIcon == original.showIcon && band.CurrentConfig().currentColor == original.currentColor, "cancel restores original in-memory display");
 		hwnd = ShowBandSettings(nullptr, &band, original);
+		Button_SetCheck(GetDlgItem(hwnd, IDC_TOOLTIP_FIRST + 1), BST_CHECKED);
 		SendDlgItemMessageW(hwnd, IDC_LANGUAGE, CB_SETCURSEL, static_cast<int>(Language::Japanese), 0);
 		SendMessageW(hwnd, WM_COMMAND, IDC_SAVE, 0);
 		Require(!IsWindow(hwnd) && LoadBandConfig().language == Language::Japanese, "save persists language and closes window");
+		Require(LoadBandConfig().tooltipEnabled && LoadBandConfig().tooltipFields == 2, "save persists tooltip selection");
 		Require(band.CurrentConfig().language == Language::Japanese, "closing after save retains committed preview");
 		hwnd = ShowBandSettings(nullptr, &band, band.CurrentConfig());
 		Button_SetCheck(GetDlgItem(hwnd, IDC_SHOW_ICON), BST_UNCHECKED);

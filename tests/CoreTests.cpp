@@ -68,8 +68,10 @@ void TestDefaultsAndRoundTrip() {
 	BandConfig config = DefaultBandConfig();
 	Require(config.scheduleHours == std::vector<int>({ 0, 6, 12, 18 }), "default schedule");
 	Require(config.delaySeconds == 900 && config.timezoneOffsetHours == 8, "default delay and timezone");
+	Require(config.tooltipEnabled && config.tooltipFields == 0, "default tooltip only shows fixed refresh and status");
 	config.currentColor = RGB(12, 34, 56);
 	config.showMin = false;
+	config.tooltipEnabled = false; config.tooltipFields = 85;
 	config.delaySeconds = 123;
 	config.icons = { { -1, L"未知图标" }, { 0, L"sunny" } };
 	Require(SaveBandConfig(config), "initial config save");
@@ -77,6 +79,7 @@ void TestDefaultsAndRoundTrip() {
 	Require(bytes.starts_with("\xEF\xBB\xBF"), "UTF-8 BOM must be preserved");
 	BandConfig loaded = LoadBandConfig();
 	Require(loaded.url == config.url && loaded.currentColor == config.currentColor, "URL and color round trip");
+	Require(!loaded.tooltipEnabled && loaded.tooltipFields == 85, "tooltip settings round trip");
 	Require(loaded.icons == config.icons && !loaded.showMin && loaded.delaySeconds == 123, "Unicode icon names and hidden/stagger settings round trip");
 	Require(ReadConfigBytes() == bytes, "loading current config must not rewrite it");
 }
@@ -95,6 +98,7 @@ void TestLanguageAndMigration() {
 	std::string old = R"(<WeatherBar><Data><ForecastUrl value="39.9286, 116.4103"/><StaggerSeconds value="73"/></Data><Current><Color value="123456"/></Current><Icon key="0" filename="my-sun"/></WeatherBar>)";
 	WriteConfigText(old);
 	BandConfig migrated = LoadBandConfig();
+	Require(migrated.tooltipEnabled && migrated.tooltipFields == 0, "old configuration without tooltip fields uses new defaults");
 	Require(migrated.language == Language::System && migrated.delaySeconds == 73 && FormatColorText(migrated.currentColor) == L"123456", "migration retains user values and fills defaults");
 	Require(migrated.icons[0].second == L"my-sun", "custom icon mapping is retained");
 	Require(ReadConfigBytes().find("<Language") != std::string::npos, "missing language is added to old configuration");
@@ -136,11 +140,22 @@ void TestRenamedConfiguration() {
 }
 
 void TestUpdateClassification() {
+	std::wstring redirectVersion;
+	Require(ClassifyReleaseRedirect(L"https://github.com/zdxxm10/WeatherBar/releases/tag/v99.0.0", redirectVersion) == UpdateStatus::Available, "official latest-release redirect");
+	for (const wchar_t* url : { L"https://evil.example/releases/tag/v99.0.0", L"https://github.com/other/WeatherBar/releases/tag/v99.0.0", L"https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0.0-beta", L"https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0.0?x=1" })
+		Require(ClassifyReleaseRedirect(url, redirectVersion) == UpdateStatus::Failed, "reject foreign URLs and nonstable redirect tags");
 	std::wstring version;
 	Require(ClassifyRelease(404, "", version) == UpdateStatus::NoRelease, "no published release");
 	Require(ClassifyRelease(403, "rate limited", version) == UpdateStatus::Failed, "rate limiting is not success");
-	Require(ClassifyRelease(200, R"({"tag_name":"v0.2.0"})", version) == UpdateStatus::Current, "current version");
-	Require(ClassifyRelease(200, R"({"tag_name":"v0.3.0"})", version) == UpdateStatus::Available, "new stable release");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.0"})", version) == UpdateStatus::Current, "two-part current version");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.0.0"})", version) == UpdateStatus::Current, "equivalent three-part version");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.0.1"})", version) == UpdateStatus::Available, "new patch release");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.1"})", version) == UpdateStatus::Available, "new two-part minor release");
+	Require(ClassifyReleaseRedirect(L"https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0", version) == UpdateStatus::Current, "two-part release-page fallback");
+	for (const wchar_t* invalid : { L"1", L"1.", L"1.0.", L"1.0.0.0", L"1.0-beta", L"1.0?x=1", L"-1.0" }) {
+		int parts[3]{};
+		Require(!ParseReleaseVersion(invalid, parts), "malformed or nonstable versions rejected");
+	}
 	Require(ClassifyRelease(200, R"({"tag_name":"v0.0.9"})", version) == UpdateStatus::Current, "older remote version does not trigger downgrade");
 	Require(ClassifyRelease(200, R"({"tag_name":"v0.2.0-beta"})", version) == UpdateStatus::Failed, "prerelease labels are not installed");
 	Require(ClassifyRelease(200, "not JSON", version) == UpdateStatus::Failed, "invalid response is not latest");
@@ -245,6 +260,14 @@ void TestForecastParsing() {
 	Require(!cache.days[1].hours[0].valid && cache.days[1].maxTemperature == L"31.0℃", "null hourly data and tomorrow extremes");
 	std::string fallback = "{\"current_weather\":{\"time\":" + stamp + ",\"temperature\":-5.5,\"weathercode\":3}}";
 	Require(ParseForecast(fallback, 0).days[0].hours[0].temperature == L"-5.5℃", "legacy current-weather fallback");
+	std::string extra = "{\"hourly\":{\"time\":[" + stamp + "],\"temperature_2m\":[21],\"uv_index\":[6.2],\"wind_direction_10m\":[45],\"wind_speed_10m\":[3.5],\"relative_humidity_2m\":[65],\"apparent_temperature\":[-2.5],\"precipitation_probability\":[30]}}";
+	auto point = ParseForecast(extra, 0).days[0].hours[0];
+	Require(point.uvIndex == L"6.2" && point.windDirection == L"45" && point.windSpeed == L"3.5"
+		&& point.humidity == L"65" && point.apparentTemperature == L"-2.5" && point.precipitationProbability == L"30", "six additional forecast fields and negative feels-like");
+	extra.replace(extra.find("[65]"), 4, "[null]");
+	extra.replace(extra.find("[30]"), 4, "[101]");
+	point = ParseForecast(extra, 0).days[0].hours[0];
+	Require(point.humidity.empty() && point.precipitationProbability.empty() && point.valid, "optional null and out-of-range values do not discard temperature");
 	Instant instant;
 	Require(InstantFromText("2026-01-01T00:30", 8, instant) && instant.utc == UtcTime(2025, 12, 31, 16, 30), "text timestamp timezone conversion");
 	bool threw = false;
@@ -359,11 +382,20 @@ int wmain(int argc, wchar_t** argv) {
 	HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	if (FAILED(initialized))
 		return 2;
+	if (argc > 1 && std::wstring(argv[1]) == L"--check-update") {
+		auto check = StartUpdateCheck();
+		while (!check->done.load(std::memory_order_acquire)) Sleep(20);
+		std::wcout << L"status=" << static_cast<int>(check->status) << L" http=" << check->httpStatus
+			<< L" fallback=" << check->usedReleasePage << L" win32=" << check->errorCode << L" version=" << check->latestVersion << L'\n';
+		CoUninitialize();
+		return check->status == UpdateStatus::Failed ? 1 : 0;
+	}
 	if (argc > 1 && std::wstring(argv[1]) == L"--preview-settings") {
 		BandConfig config = DefaultBandConfig();
 		config.language = argc > 2 ? ParseLanguage(argv[2]) : Language::Chinese;
 		CDeskBand band;
 		HWND hwnd = ShowBandSettings(nullptr, &band, config);
+		ShowWindow(hwnd, SW_SHOWNORMAL);
 		MSG message{};
 		while (IsWindow(hwnd) && GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
 		CoUninitialize();
