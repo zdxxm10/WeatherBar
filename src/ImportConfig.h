@@ -13,7 +13,7 @@ constexpr int kDelayMin = 0;
 constexpr int kDelayMax = 30 * 60;
 constexpr int kDefaultDelaySeconds = 15 * 60;
 constexpr int kIconSizeMin = 16;
-constexpr int kConfigSchemaVersion = 2;
+constexpr int kConfigSchemaVersion = 3;
 
 enum class SizeLevel {
 	Small,
@@ -54,7 +54,7 @@ struct BandConfig {
 	int delaySeconds = kDefaultDelaySeconds;
 	bool showIcon = true;
 	bool tooltipEnabled = true;
-	// 位 0 为今日高低温，随后依次为紫外线、风向、风速、湿度、体感、降水概率。
+	// 位 0 为明天，位 7 为后天；位 1-6 为紫外线、风向、风速、湿度、体感、降水概率。
 	unsigned tooltipFields = 0;
 	SizeLevel iconLevel = SizeLevel::Medium;
 	SizeLevel currentLevel = SizeLevel::Large;

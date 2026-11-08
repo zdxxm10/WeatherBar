@@ -4,7 +4,7 @@
 
 **简体中文** | [English](README.en.md) | [日本語](README.ja.md)
 
-**当前版本：1.0** · [首个正式版本](https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0) · [下载 WeatherBar.exe](https://github.com/zdxxm10/WeatherBar/releases/download/v1.0/WeatherBar.exe)
+**当前版本：1.1** · [正式版本](https://github.com/zdxxm10/WeatherBar/releases/tag/v1.1) · [下载 WeatherBar.exe](https://github.com/zdxxm10/WeatherBar/releases/download/v1.1/WeatherBar.exe)
 
 ## 下载与安装
 
@@ -26,7 +26,7 @@
 - **保存**才写入 `WeatherBar.xml`；**取消**或关闭窗口会恢复打开前的设置和预览数据。**恢复默认**只重置待保存的外观，不改地址、时区和语言。
 - 地址和时区输入稍作停顿后预览；输入不完整时保留上一个有效地点，不打断外观预览。天气请求失败时保留已有缓存并提示。
 - 预报按当地 0/6/12/18 时调度，加默认 15 分钟错峰；隐藏的配置字段 `StaggerSeconds` 仍可设置 0–1800 秒。
-- 悬停提示可关闭；开启时底部固定显示“上次刷新、状态”。今日最高/最低、当前小时紫外线指数、风向、风速、相对湿度、体感温度和降水概率可分别勾选，默认不勾选。按实际字体宽度一行最多排列两项，缺失数据显示 `--`。这些选项也支持即时预览、保存与取消恢复。
+- 悬停提示可关闭；开启时底部固定显示“上次刷新、状态”。明天天气、后天天气、当前小时紫外线指数、风向、风速、相对湿度、体感温度和降水概率可分别勾选，默认不勾选。按实际字体宽度一行最多排列两项，缺失数据显示 `--`。这些选项也支持即时预览、保存与取消恢复。
 - 附加天气字段与温度共用原有请求及刷新周期；风速使用 m/s。界面中的地址保留简洁形式，程序请求时补齐所需字段。
 - “检查更新”只在点击时访问 GitHub，不自动下载或安装。API 失败时尝试读取本仓库官方最新发布页的版本跳转，避免共享出口的匿名 API 限额影响检查；仍失败时显示 HTTP 或 WinHTTP 错误码。
 
@@ -66,3 +66,11 @@ MSBuild tests\LauncherTests.vcxproj /m:1 /nr:false /p:Configuration=Release /p:P
 基于 [Nusudo-junior/WeatherDeskBand](https://github.com/Nusudo-junior/WeatherDeskBand)，保留原作者及 [MIT 许可证](LICENSE)。上游仓库名属于来源链接，不进行错误替换。
 
 天气数据：[Open-Meteo](https://open-meteo.com/)。图标：Bas Milius 的 [Meteocons](https://github.com/basmilius/meteocons)，许可证见 [METEOCONS-LICENSE.txt](src/icons/METEOCONS-LICENSE.txt)。问题反馈：[Issues](https://github.com/zdxxm10/WeatherBar/issues)。
+
+## 1.1 未来天气悬停
+
+明天天气和后天天气各有独立开关，整体控制日期、天气文字及最低温 / 最高温；新安装默认均关闭。配置格式升级为 3：旧“今日最高/最低”悬停开关开启时迁移为两天均开启，关闭或不存在则均关闭；新版独立选择保留，迁移前保留原件备份。任务栏今日高低温不变。
+
+天气文字直接来自 Open-Meteo 每日 weather_code（当天最严重现象），是单一天气摘要，不描述天气变化过程。毛毛雨和阵雨归为雨，冻毛毛雨归为冻雨，米雪和阵雪归为雪，伴冰雹雷暴归为雷暴；各类不区分强度。未知或缺失代码显示“天气未知”。按配置地点的当地日期匹配三天数据，缺失温度各自显示 `--`，不借用其他日期。用户自定义请求返回天数不足时保留缺失状态。
+
+每个日期独立一行，始终按“最低温 / 最高温”排序，例如 `明天：多云 13℃ / 22℃`。按提示字体实际宽度测量，空间不足时日期与内容分两行，两天之间不加空白行。字段沿用现有请求、缓存、失败状态与刷新周期，不增加请求。

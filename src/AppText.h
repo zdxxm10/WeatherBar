@@ -7,7 +7,7 @@
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 enum class Language { System, Chinese, English, Japanese };
-inline constexpr wchar_t kAppVersion[] = L"1.0";
+inline constexpr wchar_t kAppVersion[] = L"1.1";
 inline constexpr wchar_t kReleasePage[] = L"https://github.com/zdxxm10/WeatherBar/releases";
 
 inline Language LanguageForLocale(const std::wstring& locale) {
@@ -63,4 +63,23 @@ inline void ShowNotice(HWND owner, Language language, const wchar_t* heading, co
 	dialog.pButtons = &button;
 	if (FAILED(TaskDialogIndirect(&dialog, nullptr, nullptr, nullptr)))
 		MessageBoxW(owner, content, heading, MB_OK | MB_ICONINFORMATION);
+}
+
+// Daily WMO code is the most severe phenomenon, not an hourly transition summary.
+// Drizzle/showers -> rain; freezing drizzle -> freezing rain; grains/showers -> snow;
+// thunderstorms with hail -> thunderstorm. Unknown codes never imply clear sky.
+inline const wchar_t* DailyWeatherText(int code, Language language) {
+	switch (code) {
+	case 0: return Text(language, L"晴", L"Clear", L"快晴");
+	case 1: return Text(language, L"少云", L"Mainly clear", L"晴れ");
+	case 2: return Text(language, L"多云", L"Partly cloudy", L"部分的に曇り");
+	case 3: return Text(language, L"阴", L"Overcast", L"曇り");
+	case 45: case 48: return Text(language, L"雾", L"Fog", L"霧");
+	case 51: case 53: case 55: case 61: case 63: case 65: case 80: case 81: case 82:
+		return Text(language, L"雨", L"Rain", L"雨");
+	case 56: case 57: case 66: case 67: return Text(language, L"冻雨", L"Freezing rain", L"着氷性の雨");
+	case 71: case 73: case 75: case 77: case 85: case 86: return Text(language, L"雪", L"Snow", L"雪");
+	case 95: case 96: case 99: return Text(language, L"雷暴", L"Thunderstorm", L"雷雨");
+	default: return Text(language, L"天气未知", L"Unknown weather", L"天気不明");
+	}
 }

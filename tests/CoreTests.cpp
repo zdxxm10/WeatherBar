@@ -94,7 +94,7 @@ void TestLanguageAndMigration() {
 		config.language = language;
 		Require(SaveBandConfig(config) && LoadBandConfig().language == language, "language round trip");
 	}
-	DeleteFileW((ConfigFilePath() + L".before-v2.bak").c_str());
+	DeleteFileW((ConfigFilePath() + L".before-v3.bak").c_str());
 	std::string old = R"(<WeatherBar><Data><ForecastUrl value="39.9286, 116.4103"/><StaggerSeconds value="73"/></Data><Current><Color value="123456"/></Current><Icon key="0" filename="my-sun"/></WeatherBar>)";
 	WriteConfigText(old);
 	BandConfig migrated = LoadBandConfig();
@@ -102,7 +102,7 @@ void TestLanguageAndMigration() {
 	Require(migrated.language == Language::System && migrated.delaySeconds == 73 && FormatColorText(migrated.currentColor) == L"123456", "migration retains user values and fills defaults");
 	Require(migrated.icons[0].second == L"my-sun", "custom icon mapping is retained");
 	Require(ReadConfigBytes().find("<Language") != std::string::npos, "missing language is added to old configuration");
-	std::ifstream backup(std::filesystem::path(ConfigFilePath() + L".before-v2.bak"), std::ios::binary);
+	std::ifstream backup(std::filesystem::path(ConfigFilePath() + L".before-v3.bak"), std::ios::binary);
 	std::string backupBytes{ std::istreambuf_iterator<char>(backup), std::istreambuf_iterator<char>() };
 	Require(backupBytes == old, "migration backup is an exact copy");
 	for (const std::string& invalid : { std::string("<WeatherBar><Data>"), std::string("<OtherApp/>"), std::string("<WeatherBar version=\"invalid\"/>") }) {
@@ -121,7 +121,7 @@ void TestLanguageAndMigration() {
 void TestRenamedConfiguration() {
 	DeleteFileW(ConfigFilePath().c_str());
 	std::wstring oldPath = ModuleDirectory() + L"\\" + kLegacyConfigFile;
-	std::wstring backupPath = oldPath + L".before-v2.bak";
+	std::wstring backupPath = oldPath + L".before-v3.bak";
 	DeleteFileW(backupPath.c_str());
 	std::string root = WideToUtf8(kLegacyConfigRoot);
 	std::string original = "<" + root + R"( version="2"><General><Language value="ja"/></General><Current><Color value="123456"/></Current></)" + root + ">";
@@ -149,8 +149,8 @@ void TestUpdateClassification() {
 	Require(ClassifyRelease(403, "rate limited", version) == UpdateStatus::Failed, "rate limiting is not success");
 	Require(ClassifyRelease(200, R"({"tag_name":"v1.0"})", version) == UpdateStatus::Current, "two-part current version");
 	Require(ClassifyRelease(200, R"({"tag_name":"v1.0.0"})", version) == UpdateStatus::Current, "equivalent three-part version");
-	Require(ClassifyRelease(200, R"({"tag_name":"v1.0.1"})", version) == UpdateStatus::Available, "new patch release");
-	Require(ClassifyRelease(200, R"({"tag_name":"v1.1"})", version) == UpdateStatus::Available, "new two-part minor release");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.1.1"})", version) == UpdateStatus::Available, "new patch release");
+	Require(ClassifyRelease(200, R"({"tag_name":"v1.2"})", version) == UpdateStatus::Available, "new two-part minor release");
 	Require(ClassifyReleaseRedirect(L"https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0", version) == UpdateStatus::Current, "two-part release-page fallback");
 	for (const wchar_t* invalid : { L"1", L"1.", L"1.0.", L"1.0.0.0", L"1.0-beta", L"1.0?x=1", L"-1.0" }) {
 		int parts[3]{};
@@ -243,6 +243,32 @@ void TestSchedule() {
 	Require(NextScheduleUtc(now, 14, nullptr, 0, 0) == now + 6 * 3600, "empty schedule fallback");
 	Require(DateKeyFromUtc(now, 8) == DateKeyFromUtc(UtcTime(2027, 1, 1), 0), "new year timezone rollover");
 	Require(NextHourUtc(-1, 0) == 0, "floor division before Unix epoch");
+}
+
+void TestFutureForecast() {
+	for (time_t now : { UtcTime(2026, 1, 31, 23), UtcTime(2026, 12, 31, 23) }) {
+		std::string body = "{\"daily\":{\"time\":[" + std::to_string(now) + "," + std::to_string(now + 86400) + "," + std::to_string(now + 172800) + "],\"weather_code\":[0,63,99],\"temperature_2m_min\":[1,null,3],\"temperature_2m_max\":[10,20]}}";
+		auto cache = ParseForecast(body, 8, now);
+		for (int i = 0; i < 3; ++i) Require(cache.days[i].dateKey == DateKeyFromUtc(now + i * 86400, 8), "three local dates across month/year boundaries");
+		Require(cache.days[1].code == 63 && cache.days[1].minTemperature.empty() && cache.days[1].maxTemperature == L"20.0℃", "missing low retains high");
+		Require(cache.days[2].code == 99 && cache.days[2].minTemperature == L"3.0℃" && cache.days[2].maxTemperature.empty(), "short high array retains third day");
+		Require(ParseForecast("{\"daily\":{\"time\":[" + std::to_string(now) + "],\"temperature_2m_max\":[1]}}", 8, now).days[0].code == -1, "absent code stays unknown");
+	}
+	for (Language language : { Language::Chinese, Language::English, Language::Japanese }) {
+		for (int code : {51,53,55,61,63,65,80,81,82}) Require(std::wstring(DailyWeatherText(code, language)) == DailyWeatherText(61, language), "rain grouping");
+		for (int code : {71,73,75,77,85,86}) Require(std::wstring(DailyWeatherText(code, language)) == DailyWeatherText(71, language), "snow grouping");
+		for (int code : {56,57,66,67}) Require(std::wstring(DailyWeatherText(code, language)) == DailyWeatherText(66, language), "freezing grouping");
+		for (int code : {95,96,99}) Require(std::wstring(DailyWeatherText(code, language)) == DailyWeatherText(95, language), "thunderstorm and hail grouping");
+		Require(std::wstring(DailyWeatherText(-1, language)) == DailyWeatherText(999, language), "unknown code");
+	}
+	for (unsigned fields : {0u,1u}) {
+		WriteConfigText("<WeatherBar version=\"2\"><Tooltip><Fields value=\"" + std::to_string(fields) + "\"/></Tooltip></WeatherBar>");
+		Require(LoadBandConfig().tooltipFields == (fields ? 129u : 0u), "legacy tooltip migration");
+	}
+	for (unsigned fields : {0u,1u,128u,129u}) {
+		BandConfig config = DefaultBandConfig(); config.tooltipFields = fields;
+		Require(SaveBandConfig(config) && LoadBandConfig().tooltipFields == fields, "v3 independent choices survive reload");
+	}
 }
 
 void TestForecastParsing() {
@@ -419,6 +445,7 @@ int wmain(int argc, wchar_t** argv) {
 	run("URL and color compatibility", TestUrlAndColors);
 	run("schedule and timezone boundaries", TestSchedule);
 	run("forecast parsing and fallback", TestForecastParsing);
+	run("future dates, codes and configuration", TestFutureForecast);
 	run("async startup, error delivery and closed-window cleanup", TestAsyncLifecycle);
 	run("font and SVG resource reuse", TestDisplayResources);
 	run("localized save, cancel and appearance reset", TestSettingsBehavior);

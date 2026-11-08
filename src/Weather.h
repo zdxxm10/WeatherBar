@@ -12,6 +12,7 @@ struct HourPoint {
 
 struct DayForecast {
 	int dateKey = -1;
+	int code = -1;
 	std::wstring maxTemperature;
 	std::wstring minTemperature;
 	int sunriseHour = 6;
@@ -21,7 +22,7 @@ struct DayForecast {
 
 struct ForecastCache {
 	bool hasData = false;
-	DayForecast days[2]{};
+	DayForecast days[3]{};
 };
 
 struct FetchResult {

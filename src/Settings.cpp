@@ -16,7 +16,7 @@ enum ControlId {
 	IDC_CUR_SIZE, IDC_CUR_COLOR, IDC_SHOW_MAX, IDC_MAX_SIZE, IDC_MAX_COLOR,
 	IDC_SHOW_MIN, IDC_MIN_SIZE, IDC_MIN_COLOR,
 	IDC_SAVE, IDC_CANCEL, IDC_RESET, IDC_CHECK_UPDATE, IDC_RELEASES, IDC_UPDATE_STATUS,
-	IDC_TOOLTIP = 140, IDC_TOOLTIP_FIRST, IDC_TOOLTIP_LAST = IDC_TOOLTIP_FIRST + 6
+	IDC_TOOLTIP = 140, IDC_TOOLTIP_FIRST, IDC_TOOLTIP_LAST = IDC_TOOLTIP_FIRST + 7
 };
 constexpr UINT_PTR kUpdateTimer = 1;
 constexpr UINT_PTR kPreviewTimer = 2;
@@ -121,7 +121,7 @@ void ReadAppearance(HWND hwnd, BandConfig& draft) {
 	draft.showMin = Button_GetCheck(GetDlgItem(hwnd, IDC_SHOW_MIN)) == BST_CHECKED;
 	draft.tooltipEnabled = Button_GetCheck(GetDlgItem(hwnd, IDC_TOOLTIP)) == BST_CHECKED;
 	draft.tooltipFields = 0;
-	for (int field = 0; field < 7; ++field) {
+	for (int field = 0; field < 8; ++field) {
 		HWND check = GetDlgItem(hwnd, IDC_TOOLTIP_FIRST + field);
 		if (Button_GetCheck(check) == BST_CHECKED) draft.tooltipFields |= 1u << field;
 		EnableWindow(check, draft.tooltipEnabled);
@@ -655,15 +655,16 @@ HWND ShowBandSettings(HWND owner, CDeskBand* band, const BandConfig& current) {
 	Button_SetCheck(hover, current.tooltipEnabled ? BST_CHECKED : BST_UNCHECKED);
 	label({ L"底部固定显示：上次刷新、状态", L"Always at bottom: last refresh, status", L"最下部に常に表示：最終更新・状態" }, 20, 542, 480);
 	SettingsState::LocalText tooltipLabels[] = {
-		{ L"今日最高 / 最低", L"Today's high / low", L"今日の最高・最低" },
+		{ L"明天天气", L"Tomorrow", L"明日の天気" },
 		{ L"紫外线指数", L"UV index", L"紫外線指数" },
 		{ L"风向", L"Wind direction", L"風向" },
 		{ L"风速", L"Wind speed", L"風速" },
 		{ L"相对湿度", L"Relative humidity", L"相対湿度" },
 		{ L"体感温度", L"Feels like", L"体感温度" },
-		{ L"降水概率", L"Precipitation chance", L"降水確率" }
+		{ L"降水概率", L"Precipitation chance", L"降水確率" },
+		{ L"后天天气", L"Day after tomorrow", L"明後日の天気" }
 	};
-	for (int field = 0; field < 7; ++field) {
+	for (int field = 0; field < 8; ++field) {
 		HWND check = control(L"BUTTON", tooltipLabels[field], WS_TABSTOP | BS_AUTOCHECKBOX,
 			IDC_TOOLTIP_FIRST + field, field % 2 ? 266 : 20, 572 + field / 2 * 24, 234, 24);
 		Button_SetCheck(check, current.tooltipFields & (1u << field) ? BST_CHECKED : BST_UNCHECKED);

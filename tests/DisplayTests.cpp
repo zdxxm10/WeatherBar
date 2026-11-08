@@ -89,7 +89,24 @@ void TestTooltipAndRequestGeneration() {
 	band.config.tooltipEnabled = false;
 	Require(band.BuildTooltip().empty(), "disabled tooltip has no content");
 	band.config.tooltipEnabled = true;
-	band.config.tooltipFields = 127;
+	for (unsigned fields : { 0u, 1u, 128u, 129u }) {
+		band.config.tooltipFields = fields;
+		std::wstring text = band.BuildTooltip();
+		Require((text.find(L"Tomorrow") != std::wstring::npos) == !!(fields & 1u), "tomorrow independent switch");
+		Require((text.find(L"Day after tomorrow") != std::wstring::npos) == !!(fields & 128u), "day after independent switch");
+		if (fields) Require(text.find(L"Unknown weather -- / --") != std::wstring::npos, "missing future data retains both positions");
+	}
+	for (int i = 1; i <= 2; ++i) {
+		auto& future = band._weather.cache.days[i];
+		future.dateKey = DateKeyFromUtc(now + i * 86400, band.config.timezoneOffsetHours);
+		future.code = 2; future.minTemperature = L"13℃"; future.maxTemperature = L"22℃";
+	}
+	band.config.tooltipFields = 1;
+	Require(band.BuildTooltip().find(L"Tomorrow: Partly cloudy 13℃ / 22℃") != std::wstring::npos, "short entry stays on one row with low first");
+	band._weather.cache.days[1].minTemperature = std::wstring(80, L'9');
+	Require(band.BuildTooltip().find(L"Tomorrow\nPartly cloudy") != std::wstring::npos, "long entry splits date from content");
+	band._weather.cache.days[1].minTemperature = L"13℃";
+	band.config.tooltipFields = 255;
 	auto& point = day.hours[local.tm_hour];
 	point.uvIndex = L"6.2"; point.windDirection = L"45"; point.windSpeed = L"3.5";
 	point.humidity = L"65"; point.apparentTemperature = L"24.0"; point.precipitationProbability = L"30";
@@ -105,7 +122,7 @@ void TestTooltipAndRequestGeneration() {
 		HGDIOBJ previous = SelectObject(dc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
 		auto measure = [&](const std::wstring& text) { SIZE size{}; GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size); return size.cx; };
 		// 穷举全部勾选组合，保证可选行不超过时间行的实际像素宽度。
-		for (unsigned mask = 0; mask < 128; ++mask) {
+		for (unsigned mask = 0; mask < 256; ++mask) {
 			band.config.tooltipFields = mask;
 			std::wstring text = band.BuildTooltip();
 			size_t status = text.rfind(L'\n');
@@ -119,7 +136,7 @@ void TestTooltipAndRequestGeneration() {
 			}
 		}
 		SelectObject(dc, previous); ReleaseDC(band.tooltipHwnd, dc);
-		band.config.tooltipFields = 127;
+		band.config.tooltipFields = 255;
 	}
 	band.config.language = Language::English;
 	band.lastFetchFailed = true;

@@ -1410,7 +1410,7 @@ std::wstring CDeskBand::BuildTooltip() const {
 		direction = T(zh[index], en[index], ja[index]);
 	}
 	std::wstring fields[] = {
-		std::wstring(T(L"今日最高 / 最低：", L"High / low: ", L"最高・最低：")) + (day ? value(day->maxTemperature) + L" / " + value(day->minTemperature) : L"-- / --"),
+		L"",
 		std::wstring(T(L"紫外线指数：", L"UV index: ", L"紫外線指数：")) + (hour ? value(hour->uvIndex) : L"--"),
 		std::wstring(T(L"风向：", L"Wind direction: ", L"風向：")) + direction,
 		std::wstring(T(L"风速：", L"Wind speed: ", L"風速：")) + (hour ? value(hour->windSpeed, L" m/s") : L"--"),
@@ -1430,7 +1430,17 @@ std::wstring CDeskBand::BuildTooltip() const {
 	int limit = width(stamp == L"--" ? refreshLabel + L"2000-01-01 00:00 (UTC+14)" : refresh);
 	std::wstring text, row;
 	int count = 0;
-	for (int field = 0; field < 7; ++field) {
+	// Each future date owns its row; split only when measured text exceeds the limit.
+	for (int future = 1; future <= 2; ++future) {
+		if (!(config.tooltipFields & (future == 1 ? 1u : 128u))) continue;
+		const DayForecast* forecast = _weather.FindDay(DateKeyFromUtc(now + future * 86400, config.timezoneOffsetHours));
+		std::wstring title = future == 1 ? T(L"明天", L"Tomorrow", L"明日") : T(L"后天", L"Day after tomorrow", L"明後日");
+		std::wstring content = DailyWeatherText(forecast ? forecast->code : -1, config.language);
+		content += L" " + value(forecast ? forecast->minTemperature : L"") + L" / " + value(forecast ? forecast->maxTemperature : L"");
+		std::wstring separator = T(L"：", L": ", L"：");
+		text += title + (width(title + separator + content) <= limit ? separator : L"\n") + content + L"\n";
+	}
+	for (int field = 1; field < 7; ++field) {
 		if (!(config.tooltipFields & (1u << field))) continue;
 		std::wstring combined = row.empty() ? fields[field] : row + L"    " + fields[field];
 		if (!row.empty() && (count == 2 || width(combined) > limit)) {

@@ -262,7 +262,7 @@ void StoreHour(DayForecast& day, int hour, double temperature, int code) {
 	point.code = code;
 }
 
-ForecastCache ParseForecast(const std::string& body, int offsetHours) {
+ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now = time(nullptr)) {
 	std::string hourly = SliceObject(body, "hourly");
 	std::string daily = SliceObject(body, "daily");
 	std::string current = SliceObject(body, "current");
@@ -280,12 +280,12 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 	for (int field = 0; field < 6; ++field)
 		extras[field] = ParseNumberArray(hourly, FindKey(hourly, extraKeys[field], 0));
 	auto dayTimes = ParseInstantArray(daily, FindKey(daily, "time", 0), offsetHours);
+	auto dayCodes = ParseNumberArray(daily, FindKey(daily, "weather_code", 0));
 	auto dayMax = ParseNumberArray(daily, FindKey(daily, "temperature_2m_max", 0));
 	auto dayMin = ParseNumberArray(daily, FindKey(daily, "temperature_2m_min", 0));
 	auto sunrise = ParseInstantArray(daily, FindKey(daily, "sunrise", 0), offsetHours);
 	auto sunset = ParseInstantArray(daily, FindKey(daily, "sunset", 0), offsetHours);
 
-	time_t now = time(nullptr);
 	int today = DateKeyFromUtc(now, offsetHours);
 	int tomorrow = DateKeyFromUtc(now + 86400, offsetHours);
 	ForecastCache cache;
@@ -295,14 +295,13 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 			return &cache.days[0];
 		if (dateKey == tomorrow)
 			return &cache.days[1];
+		if (dateKey == DateKeyFromUtc(now + 2 * 86400, offsetHours))
+			return &cache.days[2];
 		return nullptr;
 	};
 
+	// Match local calendar dates; missing arrays never borrow another day or zero.
 	size_t dailyCount = dayTimes.size();
-	if (dayMax.size() < dailyCount)
-		dailyCount = dayMax.size();
-	if (dayMin.size() < dailyCount)
-		dailyCount = dayMin.size();
 	for (size_t i = 0; i < dailyCount; ++i) {
 		if (!dayTimes[i].valid)
 			continue;
@@ -311,9 +310,11 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 		if (!day)
 			continue;
 		EnsureDay(*day, dateKey);
-		if (dayMax[i].valid)
+		if (i < dayCodes.size() && dayCodes[i].valid && dayCodes[i].value >= 0 && dayCodes[i].value <= 99 && floor(dayCodes[i].value) == dayCodes[i].value)
+			day->code = static_cast<int>(dayCodes[i].value);
+		if (i < dayMax.size() && dayMax[i].valid)
 			day->maxTemperature = FormatTemperature(dayMax[i].value);
-		if (dayMin[i].valid)
+		if (i < dayMin.size() && dayMin[i].valid)
 			day->minTemperature = FormatTemperature(dayMin[i].value);
 		if (i < sunrise.size() && sunrise[i].valid) {
 			int hour = HourOf(sunrise[i].utc, offsetHours);
@@ -379,7 +380,7 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours) {
 
 	cache.hasData = false;
 	for (const DayForecast& day : cache.days) {
-		if (!day.maxTemperature.empty() || !day.minTemperature.empty())
+		if (day.code >= 0 || !day.maxTemperature.empty() || !day.minTemperature.empty())
 			cache.hasData = true;
 		for (const HourPoint& hour : day.hours) {
 			if (hour.valid)
@@ -521,6 +522,9 @@ void Weather::SetURL(std::wstring url) {
 	size_t hourly = base.find(L"hourly=");
 	if (hourly != std::wstring::npos)
 		base.insert(hourly + 7, L"uv_index,wind_direction_10m,wind_speed_10m,relative_humidity_2m,apparent_temperature,precipitation_probability,");
+	size_t daily = base.find(L"daily=");
+	if (daily != std::wstring::npos) base.insert(daily + 6, L"weather_code,");
+	else base += L"&daily=weather_code";
 	base += L"&wind_speed_unit=ms";
 }
 

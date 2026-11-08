@@ -4,7 +4,7 @@ Lightweight weather for the classic Windows taskbar.
 
 [简体中文](README.md) | **English** | [日本語](README.ja.md)
 
-**Current version: 1.0** · [First stable release](https://github.com/zdxxm10/WeatherBar/releases/tag/v1.0) · [Download WeatherBar.exe](https://github.com/zdxxm10/WeatherBar/releases/download/v1.0/WeatherBar.exe)
+**Current version: 1.1** · [Stable release](https://github.com/zdxxm10/WeatherBar/releases/tag/v1.1) · [Download WeatherBar.exe](https://github.com/zdxxm10/WeatherBar/releases/download/v1.1/WeatherBar.exe)
 
 ## Install
 
@@ -24,7 +24,7 @@ Appearance and language changes preview immediately. Click a color button for sw
 
 Languages: Simplified Chinese, English and Japanese. System default maps all Chinese regions to Simplified Chinese, Japanese to Japanese, and others to English. Install/uninstall always follows the system independently of the setting.
 
-Forecasts refresh at local 00/06/12/18 hours with a default 15-minute stagger (`StaggerSeconds`, 0–1800). The optional hover tooltip always ends with last refresh and status. Select daily high/low, hourly UV index, wind direction/speed, relative humidity, feels-like temperature and precipitation chance individually (all off by default). Missing values show `--`; up to two items share a row based on measured text width. Tooltip changes preview immediately and roll back on Cancel. Additional weather fields share the existing request and refresh schedule; wind speed uses m/s. Check updates contacts GitHub only when clicked; it never downloads or installs updates automatically. If the API fails, it checks the official latest-release redirect for this repository; failures report an HTTP or WinHTTP code.
+Forecasts refresh at local 00/06/12/18 hours with a default 15-minute stagger (`StaggerSeconds`, 0–1800). The optional hover tooltip always ends with last refresh and status. Select tomorrow, day after tomorrow, hourly UV index, wind direction/speed, relative humidity, feels-like temperature and precipitation chance individually (all off by default). Missing values show `--`; up to two items share a row based on measured text width. Tooltip changes preview immediately and roll back on Cancel. Additional weather fields share the existing request and refresh schedule; wind speed uses m/s. Check updates contacts GitHub only when clicked; it never downloads or installs updates automatically. If the API fails, it checks the official latest-release redirect for this repository; failures report an HTTP or WinHTTP code.
 
 ## Update / uninstall
 
@@ -49,3 +49,11 @@ Output: `x64/Release/WeatherBar.exe`. Tests use isolated output folders, do not 
 ## Credits / license
 
 Based on [Nusudo-junior/WeatherDeskBand](https://github.com/Nusudo-junior/WeatherDeskBand), retaining its [MIT license](LICENSE). Weather: [Open-Meteo](https://open-meteo.com/). Icons: Bas Milius [Meteocons](https://github.com/basmilius/meteocons), [MIT](src/icons/METEOCONS-LICENSE.txt). [Report issues](https://github.com/zdxxm10/WeatherBar/issues).
+
+## 1.1 Future weather tooltip
+
+Tomorrow and Day after tomorrow have independent switches controlling each complete date entry, weather description and low / high temperatures. Both default off for new installations. Configuration schema 3 migrates the old tooltip high/low switch once: enabled becomes both days enabled; disabled or absent becomes both disabled. New independent choices are preserved; the existing migration backup protects the original file. Taskbar today's extremes are unchanged.
+
+Descriptions directly map Open-Meteo daily weather_code (the day's most severe phenomenon) to a single summary, without describing transitions. Drizzle and showers map to Rain, freezing drizzle to Freezing rain, snow grains and snow showers to Snow, and thunderstorms with hail to Thunderstorm; intensity is omitted. Unknown or absent codes show Unknown weather. Match today and the next two days by the configured location's local date. Each missing temperature shows `--`, never another date's value; short custom responses remain missing.
+
+Each date prefers one row, always low / high, e.g. `Tomorrow: Partly cloudy 13℃ / 22℃`. Actual tooltip font measurement decides whether to split the date and content into two rows, without blank rows between dates. Existing requests, cache, failure status and refresh cadence are reused.
