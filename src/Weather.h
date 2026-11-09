@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <windows.h>
+#include <stdexcept>
 
 struct HourPoint {
 	bool valid = false;
@@ -22,6 +23,9 @@ struct DayForecast {
 
 struct ForecastCache {
 	bool hasData = false;
+	bool timezoneValid = false;
+	int utcOffsetSeconds = 0;
+	std::wstring timezone;
 	DayForecast days[3]{};
 };
 
@@ -37,7 +41,8 @@ constexpr UINT WM_WEATHER_READY = WM_APP + 1;
 class Weather {
 public:
 	void SetURL(std::wstring url);
-	void BeginFetch(HWND hwnd, void* owner, unsigned long long generation, int offsetHours);
+	void BeginFetch(HWND hwnd, void* owner, unsigned long long generation);
+	ForecastCache Fetch() const;
 	bool HasDay(int dateKey) const;
 	const DayForecast* FindDay(int dateKey) const;
 	ForecastCache cache;
@@ -46,7 +51,17 @@ private:
 	std::wstring base;
 };
 
-bool BreakLocalTime(time_t utc, int offsetHours, tm& local);
-int DateKeyFromUtc(time_t utc, int offsetHours);
-time_t NextHourUtc(time_t now, int offsetHours);
-time_t NextScheduleUtc(time_t now, int offsetHours, const int* hours, int hourCount, int delaySeconds);
+class WeatherHttpError : public std::runtime_error {
+public:
+	explicit WeatherHttpError(const char* message) : std::runtime_error(message) {}
+};
+
+ForecastCache ParseLocationForecast(const std::string& body);
+std::wstring PrepareForecastUrl(std::wstring url);
+std::string WeatherHttpGet(const std::wstring& url);
+std::wstring FormatUtcOffset(int seconds);
+
+bool BreakLocalTime(time_t utc, int offsetSeconds, tm& local);
+int DateKeyFromUtc(time_t utc, int offsetSeconds);
+time_t NextHourUtc(time_t now, int offsetSeconds);
+time_t NextScheduleUtc(time_t now, int offsetSeconds, const int* hours, int hourCount, int delaySeconds);

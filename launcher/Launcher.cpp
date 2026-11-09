@@ -392,7 +392,7 @@ bool Uninstall(const std::wstring& exeDirectory, const std::wstring& dllPath) {
 		T(L"天气条已卸载", L"WeatherBar was uninstalled", L"アンインストールが完了しました"),
 		removeSettings
 			? T(L"设置、备份、日志和图标已删除。关闭此窗口后清理 EXE，目录为空时一并删除。\n\n同目录中与本软件无关的文件会保留。", L"Settings, backups, logs and icons were deleted. Closing this window removes the EXE and the folder if empty.\n\nUnrelated files in the folder are kept.", L"設定・バックアップ・ログ・アイコンを削除しました。画面を閉じると EXE と空のフォルダーを削除します。無関係なファイルは保持します。")
-			: T(L"设置和图标已保留。\n\n手动更新：替换同目录的 EXE，再双击安装。新程序会更新 DLL，并补齐缺少的配置和图标。", L"Settings and icons were kept.\n\nTo update manually, replace the EXE in this folder and run it again. The new program updates the DLL and adds missing settings and icons.", L"設定とアイコンを保持しました。\n\n手動更新するには、このフォルダーの EXE を置き換えて再実行してください。DLL を更新し、不足する設定とアイコンを追加します。"));
+			: T(L"设置和图标已保留。\n\n手动更新：替换同目录的 EXE，再双击安装。新程序会读取保留的配置、更新 DLL 并补齐缺少的图标。", L"Settings and icons were kept.\n\nTo update manually, replace the EXE in this folder and run it again. The new program reads retained settings, updates the DLL and adds missing icons.", L"設定とアイコンを保持しました。\n\n手動更新するには、このフォルダーの EXE を置き換えて再実行してください。保持した設定を読み込み、DLL を更新して不足するアイコンを追加します。"));
 	return true;
 }
 bool WriteIfChanged(const std::wstring& path, const void* data, DWORD size, bool preserveExisting = false) {

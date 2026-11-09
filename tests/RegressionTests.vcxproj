@@ -38,6 +38,7 @@
     <ClCompile Include="..\src\ImageList.cpp" />
     <ClCompile Include="SettingsTests.cpp" />
     <ClCompile Include="..\src\Update.cpp" />
+    <ClCompile Include="LocationTests.cpp" />
     <TestIcon Include="..\src\icons\*.svg" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

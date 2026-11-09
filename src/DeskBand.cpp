@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "DeskBand.h"
 #include "ClsId.h"
 #include "Settings.h"
@@ -665,25 +665,36 @@ bool CDeskBand::ApplySavedConfig(const BandConfig& incoming)
 	return true;
 }
 
-void CDeskBand::ApplyPreviewConfig(const BandConfig& incoming)
+void CDeskBand::ApplyPreviewConfig(const BandConfig& incoming, const ForecastCache* validated)
 {
 	BandConfig next = incoming;
 	next.icons = config.icons;
 	NormalizeBandConfig(next);
-	bool dataChanged = next.url != config.url || next.timezoneOffsetHours != config.timezoneOffsetHours;
+	bool dataChanged = next.url != config.url || next.locationMode != config.locationMode;
 	config = std::move(next);
 	if (tooltipHwnd) {
 		SendMessageW(tooltipHwnd, TTM_POP, 0, 0);
-		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled, 0);
+		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled && (config.tooltipFields || config.tooltipRefresh || config.tooltipStatus), 0);
 	}
 	if (dataChanged) ++generation;
+	if (!HasConfiguredLocation(config)) {
+		// Cancelling a first location preview must also retire its cache and future scheduling.
+		_weather.cache.hasData = false; _weather.cache.timezoneValid = false; _weather.cache.utcOffsetSeconds = 0; _weather.cache.timezone.clear();
+		for (auto& day : _weather.cache.days) day = DayForecast{};
+		followUp = false; lastSuccessfulFetch = 0; lastFetchFailed = false;
+	}
+	if (validated && HasConfiguredLocation(config)) {
+		_weather.cache = *validated;
+		lastSuccessfulFetch = time(nullptr);
+		lastFetchFailed = false;
+	}
 	_weather.SetURL(config.url);
 	// 预览仅改内存，字体和 SVG 仍按实际像素变化复用；保存是唯一的落盘入口。
 	metricsReady = false;
 	ArmTimer();
 	RequestResize();
 	InvalidateBand();
-	if (dataChanged) StartFetch();
+	if (dataChanged && !validated) StartFetch();
 }
 
 void CDeskBand::OnSettingsClosed()
@@ -723,11 +734,11 @@ void CDeskBand::OnCreate(HWND hwnd)
 		tool.uId = reinterpret_cast<UINT_PTR>(hwnd);
 		tool.lpszText = LPSTR_TEXTCALLBACKW;
 		SendMessageW(tooltipHwnd, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
-		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled, 0);
+		SendMessageW(tooltipHwnd, TTM_ACTIVATE, config.tooltipEnabled && (config.tooltipFields || config.tooltipRefresh || config.tooltipStatus), 0);
 		SendMessageW(tooltipHwnd, TTM_SETDELAYTIME, TTDT_AUTOPOP, 15000);
 	}
 	UpdateDpi(hwnd);
-	lastDateKey = DateKeyFromUtc(time(nullptr), config.timezoneOffsetHours);
+	lastDateKey = DateKeyFromUtc(time(nullptr), UtcOffsetSeconds());
 	ArmTimer();
 	StartFetch();
 }
@@ -998,8 +1009,8 @@ CDeskBand::Metrics CDeskBand::Measure()
 	Metrics identity;
 	time_t now = time(nullptr);
 	tm local{};
-	BreakLocalTime(now, config.timezoneOffsetHours, local);
-	int today = DateKeyFromUtc(now, config.timezoneOffsetHours);
+	BreakLocalTime(now, UtcOffsetSeconds(), local);
+	int today = DateKeyFromUtc(now, UtcOffsetSeconds());
 	const DayForecast* day = _weather.FindDay(today);
 	identity.currentText = L"--";
 	identity.weatherCode = -1;
@@ -1295,9 +1306,10 @@ void CDeskBand::ArmTimer()
 {
 	if (!m_hwnd || shuttingDown)
 		return;
+	if (!HasConfiguredLocation(config)) { KillTimer(m_hwnd, TIMER_WAKE); armedUntil = 0; armedForSchedule = false; return; }
 	time_t now = time(nullptr);
-	time_t hourAt = NextHourUtc(now, config.timezoneOffsetHours);
-	time_t slotAt = NextScheduleUtc(now, config.timezoneOffsetHours, config.scheduleHours.data(), (int)config.scheduleHours.size(), config.delaySeconds);
+	time_t hourAt = NextHourUtc(now, UtcOffsetSeconds());
+	time_t slotAt = NextScheduleUtc(now, UtcOffsetSeconds(), config.scheduleHours.data(), (int)config.scheduleHours.size(), config.delaySeconds);
 	time_t wake = hourAt < slotAt ? hourAt : slotAt;
 	armedForSchedule = slotAt <= hourAt;
 	armedUntil = wake;
@@ -1318,8 +1330,9 @@ void CDeskBand::OnTimer()
 	if (!m_hwnd || shuttingDown)
 		return;
 	KillTimer(m_hwnd, TIMER_WAKE);
+	if (!HasConfiguredLocation(config)) return;
 	time_t now = time(nullptr);
-	int today = DateKeyFromUtc(now, config.timezoneOffsetHours);
+	int today = DateKeyFromUtc(now, UtcOffsetSeconds());
 	bool fetch = armedForSchedule && now + 2 >= armedUntil;
 	if (today != lastDateKey) {
 		lastDateKey = today;
@@ -1334,7 +1347,7 @@ void CDeskBand::OnTimer()
 
 void CDeskBand::StartFetch()
 {
-	if (shuttingDown || !m_hwnd)
+	if (shuttingDown || !m_hwnd || !HasConfiguredLocation(config))
 		return;
 	if (inFlight) {
 		followUp = true;
@@ -1342,7 +1355,7 @@ void CDeskBand::StartFetch()
 	}
 	inFlight = true;
 	try {
-		_weather.BeginFetch(m_hwnd, this, generation, config.timezoneOffsetHours);
+		_weather.BeginFetch(m_hwnd, this, generation);
 	}
 	catch (...) {
 		inFlight = false;
@@ -1367,15 +1380,17 @@ void CDeskBand::OnWeather(FetchResult* result)
 		_weather.cache = result->cache;
 		lastSuccessfulFetch = time(nullptr);
 		failedUrl.clear();
+		lastDateKey = DateKeyFromUtc(time(nullptr), UtcOffsetSeconds());
+		ArmTimer(); // A successful response may change the automatic UTC offset.
 	}
 	else if (failedUrl != config.url) {
 		failedUrl = config.url;
 		ShowNotice(m_hwnd, config.language,
 			Text(config.language, L"未能获取天气", L"Weather is unavailable", L"天気を取得できませんでした"),
 			Text(config.language,
-				L"请检查网络及设置中的 Open-Meteo 地址。\n\n已有温度会暂时保留。开启悬停提示后可查看上次刷新和状态。",
-				L"Check your connection and the Open-Meteo URL in settings.\n\nExisting temperatures are kept. Enable the tooltip to see last refresh and status.",
-				L"接続と設定内の Open-Meteo URL を確認してください。\n\n以前の気温は保持します。ツールチップを有効にすると、最終更新と状態を確認できます。"));
+				L"请检查网络及设置中的 Open-Meteo 地址。\n\n已有温度会暂时保留。可在悬停设置中勾选刷新时间和数据状态。",
+				L"Check your connection and the Open-Meteo URL in settings.\n\nExisting temperatures are kept. Select Last refresh time and Data status in tooltip settings.",
+				L"接続と設定内の Open-Meteo URL を確認してください。\n\n以前の気温は保持します。ツールチップ設定で最終更新時刻とデータ状態を選択できます。"));
 	}
 	bool again = followUp;
 	followUp = false;
@@ -1385,21 +1400,32 @@ void CDeskBand::OnWeather(FetchResult* result)
 		StartFetch();
 }
 
+static std::wstring SystemRefreshTime(time_t instant, Language language) {
+	if (instant > 0) {
+		// Store an instant; only its display follows the computer's current Windows timezone.
+		ULARGE_INTEGER ticks{}; ticks.QuadPart = (static_cast<ULONGLONG>(instant) + 11644473600ULL) * 10000000ULL;
+		FILETIME file{ticks.LowPart, ticks.HighPart}; SYSTEMTIME utc{}, local{};
+		DYNAMIC_TIME_ZONE_INFORMATION zone{};
+		if (GetDynamicTimeZoneInformation(&zone) != TIME_ZONE_ID_INVALID && FileTimeToSystemTime(&file, &utc)
+			&& SystemTimeToTzSpecificLocalTimeEx(&zone, &utc, &local)) {
+			wchar_t buffer[40]{};
+			swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute);
+			return buffer;
+		}
+	}
+	return Text(language, L"尚未刷新", L"Not refreshed yet", L"未更新");
+}
+
 std::wstring CDeskBand::BuildTooltip() const {
 	if (!config.tooltipEnabled) return L"";
 	auto T = [&](const wchar_t* zh, const wchar_t* en, const wchar_t* ja) { return Text(config.language, zh, en, ja); };
 	time_t now = time(nullptr);
-	const DayForecast* day = _weather.FindDay(DateKeyFromUtc(now, config.timezoneOffsetHours));
+	const DayForecast* day = _weather.FindDay(DateKeyFromUtc(now, UtcOffsetSeconds()));
 	tm local{};
-	const HourPoint* hour = day && BreakLocalTime(now, config.timezoneOffsetHours, local) ? &day->hours[local.tm_hour] : nullptr;
+	const HourPoint* hour = day && BreakLocalTime(now, UtcOffsetSeconds(), local) ? &day->hours[local.tm_hour] : nullptr;
 	auto value = [](const std::wstring& number, const wchar_t* unit = L"") { return number.empty() ? std::wstring(L"--") : number + unit; };
 	std::wstring refreshLabel = T(L"上次刷新：", L"Last refresh: ", L"最終更新：");
-	std::wstring stamp = L"--";
-	if (lastSuccessfulFetch && BreakLocalTime(lastSuccessfulFetch, config.timezoneOffsetHours, local)) {
-		wchar_t buffer[80]{};
-		swprintf_s(buffer, L"%04d-%02d-%02d %02d:%02d (UTC%+d)", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, config.timezoneOffsetHours);
-		stamp = buffer;
-	}
+	std::wstring stamp = SystemRefreshTime(lastSuccessfulFetch, config.language);
 	std::wstring refresh = refreshLabel + stamp;
 	std::wstring direction = L"--";
 	if (hour && !hour->windDirection.empty()) {
@@ -1427,13 +1453,14 @@ std::wstring CDeskBand::BuildTooltip() const {
 		if (dc) GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
 		return size.cx;
 	};
-	int limit = width(stamp == L"--" ? refreshLabel + L"2000-01-01 00:00 (UTC+14)" : refresh);
+	// A bounded DPI-scaled width works even when the refresh row is disabled.
+	int limit = (std::max)(static_cast<int>(width(refreshLabel + L"2000-01-01 00:00")), MulDiv(320, tooltipHwnd ? GetDpiForWindow(tooltipHwnd) : 96, 96));
 	std::wstring text, row;
 	int count = 0;
 	// Each future date owns its row; split only when measured text exceeds the limit.
 	for (int future = 1; future <= 2; ++future) {
 		if (!(config.tooltipFields & (future == 1 ? 1u : 128u))) continue;
-		const DayForecast* forecast = _weather.FindDay(DateKeyFromUtc(now + future * 86400, config.timezoneOffsetHours));
+		const DayForecast* forecast = _weather.FindDay(DateKeyFromUtc(now + future * 86400, UtcOffsetSeconds()));
 		std::wstring title = future == 1 ? T(L"明天", L"Tomorrow", L"明日") : T(L"后天", L"Day after tomorrow", L"明後日");
 		std::wstring content = DailyWeatherText(forecast ? forecast->code : -1, config.language);
 		content += L" " + value(forecast ? forecast->minTemperature : L"") + L" / " + value(forecast ? forecast->maxTemperature : L"");
@@ -1455,12 +1482,19 @@ std::wstring CDeskBand::BuildTooltip() const {
 		if (previous && previous != HGDI_ERROR) SelectObject(dc, previous);
 		ReleaseDC(tooltipHwnd, dc);
 	}
-	text += refresh + L"\n" + T(L"状态：", L"Status: ", L"状態：");
-	if (inFlight) text += T(L"正在更新…", L"Updating…", L"更新中…");
-	else if (!_weather.cache.hasData) text += T(L"尚未获取到天气", L"No weather data yet", L"天気データはまだありません");
-	else if (!day || now - lastSuccessfulFetch > 8 * 3600) text += T(L"预报可能已过期，请刷新", L"Forecast may be stale; refresh", L"予報が古い可能性があります。更新してください");
-	else if (lastFetchFailed) text += T(L"刷新失败，使用上次预报", L"Failed; using previous forecast", L"更新失敗。前回の予報を表示中");
-	else text += T(L"正常", L"Up to date", L"正常");
+	if (config.tooltipRefresh) text += refresh + L"\n";
+	if (config.tooltipStatus) {
+		text += T(L"状态：", L"Status: ", L"状態：");
+		// Priority: protected config, no location, updating, no data, stale, cached failure, healthy.
+		if (!config.canSave) text += T(L"配置无法读取或版本过高，原文件已保护", L"Configuration unreadable or newer; original protected", L"設定を読み取れないか新しい形式です。元ファイルを保護中");
+		else if (!HasConfiguredLocation(config)) text += T(L"请在设置中选择地点", L"Choose a location in Settings", L"設定で地点を選択してください");
+		else if (inFlight) text += T(L"正在更新…", L"Updating…", L"更新中…");
+		else if (!_weather.cache.hasData) text += T(L"尚未获取到天气", L"No weather data yet", L"天気データはまだありません");
+		else if (!day || now - lastSuccessfulFetch > 8 * 3600) text += T(L"预报可能已过期，请刷新", L"Forecast may be stale; refresh", L"予報が古い可能性があります。更新してください");
+		else if (lastFetchFailed) text += T(L"刷新失败，使用上次预报", L"Failed; using previous forecast", L"更新失敗。前回の予報を表示中");
+		else text += T(L"正常", L"Up to date", L"正常");
+	}
+	if (!text.empty() && text.back() == L'\n') text.pop_back();
 	return text;
 }
 
@@ -1550,7 +1584,7 @@ void CDeskBand::ShowContextMenu(HWND hwnd, POINT clientPoint)
 	AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 	AppendMenuW(menu, MF_STRING, CMD_UNINSTALL, Text(config.language, L"卸载", L"Uninstall", L"アンインストール"));
 	AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(menu, MF_STRING, CMD_REFRESH, Text(config.language, L"立即刷新气温", L"Refresh weather", L"天気を更新"));
+	AppendMenuW(menu, MF_STRING | (HasConfiguredLocation(config) ? 0 : MF_GRAYED), CMD_REFRESH, Text(config.language, L"立即刷新气温", L"Refresh weather", L"天気を更新"));
 	POINT screen = point;
 	ClientToScreen(hwnd, &screen);
 	SetForegroundWindow(hwnd);

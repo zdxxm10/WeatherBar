@@ -71,6 +71,23 @@ int wmain(int argc, wchar_t** argv) {
 		Require(!replacedLoaded, "mapped DLL must not be replaced while loaded");
 		Require(WriteIfChanged(loadedPath, "new DLL", 7), "mapped DLL replaces after unloading");
 		#endif
+		std::wstring retainedConfig = directory + L"\\WeatherBar.xml";
+		std::string retainedXml = "<WeatherBar version=\"5\"><Location><Mode value=\"0\"/></Location><Data><ForecastUrl>saved-user-url</ForecastUrl></Data></WeatherBar>";
+		Require(WriteIfChanged(retainedConfig, retainedXml.data(), static_cast<DWORD>(retainedXml.size())), "prepare retained user config fixture");
+		HMODULE reinstall = LoadLibraryExW((repository / L"x64" / L"Release" / L"WeatherBar.exe").c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE);
+		Require(reinstall != nullptr, "read installer payload without running installation");
+		for (int attempt = 0; attempt < 2; ++attempt) {
+			Require(WriteResource(reinstall, RT_RCDATA, MAKEINTRESOURCEW(101), dll), "isolated upgrade/reinstall DLL extraction");
+			Require(WriteResource(reinstall, L"SVG", L"sunny", icon, true), "isolated icon extraction preserves custom icon");
+			Require(ReadBytes(retainedConfig) == retainedXml, "payload extraction never overwrites retained configuration");
+		}
+		FreeLibrary(reinstall);
+		if (argc > 1 && std::wstring(argv[1]) == L"--retention-only") {
+			for (const auto& path : {icon, dll, loadedPath, retainedConfig}) DeleteFileW(path.c_str());
+			RemoveDirectoryW(directory.c_str());
+			std::cout << "PASS isolated upgrade/reinstall resource extraction preserves XML and icons\n";
+			return 0;
+		}
 		for (const wchar_t* name : { L"WeatherBar.xml", L"WeatherBar.xml.before-v2.bak", L"log.txt" })
 			Require(WriteIfChanged(directory + L"\\" + name, "fixture", 7), "prepare disposable config fixture");
 		Require(WriteIfChanged(directory + L"\\WeatherBar.xml.before-v1.bak", "old", 3), "prepare older migration backup");

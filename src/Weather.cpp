@@ -2,6 +2,7 @@
 #include "Weather.h"
 #include "OutputLog.h"
 #include "ModuleReference.h"
+#include "ServiceJson.h"
 #include <climits>
 #include <cstring>
 #include <cstdio>
@@ -74,9 +75,9 @@ std::vector<NumberValue> ParseNumberArray(const std::string& body, size_t keyPos
 	return values;
 }
 
-int HourOf(time_t utc, int offsetHours) {
+int HourOf(time_t utc, int offsetSeconds) {
 	tm local{};
-	if (!BreakLocalTime(utc, offsetHours, local))
+	if (!BreakLocalTime(utc, offsetSeconds, local))
 		return -1;
 	return local.tm_hour;
 }
@@ -120,7 +121,7 @@ struct Instant {
 	time_t utc = 0;
 };
 
-bool InstantFromClock(int year, int month, int day, int hour, int minute, int second, int offsetHours, Instant& out) {
+bool InstantFromClock(int year, int month, int day, int hour, int minute, int second, int offsetSeconds, Instant& out) {
 	if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60)
 		return false;
 	tm local{};
@@ -134,11 +135,11 @@ bool InstantFromClock(int year, int month, int day, int hour, int minute, int se
 	if (stamped == (time_t)-1)
 		return false;
 	out.valid = true;
-	out.utc = stamped - (time_t)offsetHours * 3600;
+	out.utc = stamped - (time_t)offsetSeconds;
 	return true;
 }
 
-bool InstantFromText(const std::string& text, int offsetHours, Instant& out) {
+bool InstantFromText(const std::string& text, int offsetSeconds, Instant& out) {
 	int year = 0;
 	int month = 0;
 	int day = 0;
@@ -150,7 +151,7 @@ bool InstantFromText(const std::string& text, int offsetHours, Instant& out) {
 		count = sscanf_s(text.c_str(), "%d-%d-%d", &year, &month, &day);
 	if (count < 3)
 		return false;
-	return InstantFromClock(year, month, day, hour, minute, second, offsetHours, out);
+	return InstantFromClock(year, month, day, hour, minute, second, offsetSeconds, out);
 }
 
 size_t SkipListSpace(const std::string& body, size_t i) {
@@ -159,7 +160,7 @@ size_t SkipListSpace(const std::string& body, size_t i) {
 	return i;
 }
 
-std::vector<Instant> ParseInstantArray(const std::string& body, size_t keyPos, int offsetHours) {
+std::vector<Instant> ParseInstantArray(const std::string& body, size_t keyPos, int offsetSeconds) {
 	std::vector<Instant> values;
 	if (keyPos == std::string::npos)
 		return values;
@@ -181,7 +182,7 @@ std::vector<Instant> ParseInstantArray(const std::string& body, size_t keyPos, i
 			if (end == std::string::npos)
 				break;
 			Instant instant;
-			InstantFromText(body.substr(i + 1, end - i - 1), offsetHours, instant);
+			InstantFromText(body.substr(i + 1, end - i - 1), offsetSeconds, instant);
 			values.push_back(instant);
 			i = end + 1;
 			continue;
@@ -199,7 +200,7 @@ std::vector<Instant> ParseInstantArray(const std::string& body, size_t keyPos, i
 	return values;
 }
 
-Instant ParseInstantField(const std::string& body, const char* key, int offsetHours) {
+Instant ParseInstantField(const std::string& body, const char* key, int offsetSeconds) {
 	Instant instant;
 	size_t keyPos = FindKey(body, key, 0);
 	if (keyPos == std::string::npos)
@@ -214,7 +215,7 @@ Instant ParseInstantField(const std::string& body, const char* key, int offsetHo
 		size_t end = body.find('"', i + 1);
 		if (end == std::string::npos)
 			return instant;
-		InstantFromText(body.substr(i + 1, end - i - 1), offsetHours, instant);
+		InstantFromText(body.substr(i + 1, end - i - 1), offsetSeconds, instant);
 		return instant;
 	}
 	char* end = nullptr;
@@ -262,14 +263,27 @@ void StoreHour(DayForecast& day, int hour, double temperature, int code) {
 	point.code = code;
 }
 
-ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now = time(nullptr)) {
+ForecastCache ParseForecast(const std::string& body, int offsetSeconds, time_t now = time(nullptr), bool automaticTimezone = false) {
+	ForecastCache cache;
+	if (automaticTimezone) {
+		JsonApartment apartment;
+		auto root = ServiceJson(body);
+		cache.timezone = JsonText(root, L"timezone");
+		double seconds = root.GetNamedNumber(L"utc_offset_seconds", 1e9);
+		if ((cache.timezone != L"GMT" && cache.timezone != L"UTC" && cache.timezone.find(L'/') == std::wstring::npos)
+			|| cache.timezone.size() > 128 || cache.timezone.find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_-+") != std::wstring::npos
+			|| !std::isfinite(seconds) || seconds < -43200 || seconds > 50400 || floor(seconds) != seconds)
+			throw std::runtime_error("invalid automatic timezone");
+		cache.timezoneValid = true;
+		cache.utcOffsetSeconds = offsetSeconds = static_cast<int>(seconds);
+	}
 	std::string hourly = SliceObject(body, "hourly");
 	std::string daily = SliceObject(body, "daily");
 	std::string current = SliceObject(body, "current");
 	if (current.empty())
 		current = SliceObject(body, "current_weather");
 
-	auto times = ParseInstantArray(hourly, FindKey(hourly, "time", 0), offsetHours);
+	auto times = ParseInstantArray(hourly, FindKey(hourly, "time", 0), offsetSeconds);
 	auto temps = ParseNumberArray(hourly, FindKey(hourly, "temperature_2m", 0));
 	size_t codeKey = FindKey(hourly, "weathercode", 0);
 	if (codeKey == std::string::npos)
@@ -279,23 +293,22 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now
 	std::vector<NumberValue> extras[6];
 	for (int field = 0; field < 6; ++field)
 		extras[field] = ParseNumberArray(hourly, FindKey(hourly, extraKeys[field], 0));
-	auto dayTimes = ParseInstantArray(daily, FindKey(daily, "time", 0), offsetHours);
+	auto dayTimes = ParseInstantArray(daily, FindKey(daily, "time", 0), offsetSeconds);
 	auto dayCodes = ParseNumberArray(daily, FindKey(daily, "weather_code", 0));
 	auto dayMax = ParseNumberArray(daily, FindKey(daily, "temperature_2m_max", 0));
 	auto dayMin = ParseNumberArray(daily, FindKey(daily, "temperature_2m_min", 0));
-	auto sunrise = ParseInstantArray(daily, FindKey(daily, "sunrise", 0), offsetHours);
-	auto sunset = ParseInstantArray(daily, FindKey(daily, "sunset", 0), offsetHours);
+	auto sunrise = ParseInstantArray(daily, FindKey(daily, "sunrise", 0), offsetSeconds);
+	auto sunset = ParseInstantArray(daily, FindKey(daily, "sunset", 0), offsetSeconds);
 
-	int today = DateKeyFromUtc(now, offsetHours);
-	int tomorrow = DateKeyFromUtc(now + 86400, offsetHours);
-	ForecastCache cache;
+	int today = DateKeyFromUtc(now, offsetSeconds);
+	int tomorrow = DateKeyFromUtc(now + 86400, offsetSeconds);
 
 	auto slotFor = [&](int dateKey) -> DayForecast* {
 		if (dateKey == today)
 			return &cache.days[0];
 		if (dateKey == tomorrow)
 			return &cache.days[1];
-		if (dateKey == DateKeyFromUtc(now + 2 * 86400, offsetHours))
+		if (dateKey == DateKeyFromUtc(now + 2 * 86400, offsetSeconds))
 			return &cache.days[2];
 		return nullptr;
 	};
@@ -305,7 +318,7 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now
 	for (size_t i = 0; i < dailyCount; ++i) {
 		if (!dayTimes[i].valid)
 			continue;
-		int dateKey = DateKeyFromUtc(dayTimes[i].utc, offsetHours);
+		int dateKey = DateKeyFromUtc(dayTimes[i].utc, offsetSeconds);
 		DayForecast* day = slotFor(dateKey);
 		if (!day)
 			continue;
@@ -317,12 +330,12 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now
 		if (i < dayMin.size() && dayMin[i].valid)
 			day->minTemperature = FormatTemperature(dayMin[i].value);
 		if (i < sunrise.size() && sunrise[i].valid) {
-			int hour = HourOf(sunrise[i].utc, offsetHours);
+			int hour = HourOf(sunrise[i].utc, offsetSeconds);
 			if (hour >= 0)
 				day->sunriseHour = hour;
 		}
 		if (i < sunset.size() && sunset[i].valid) {
-			int hour = HourOf(sunset[i].utc, offsetHours);
+			int hour = HourOf(sunset[i].utc, offsetSeconds);
 			if (hour >= 0)
 				day->sunsetHour = hour;
 		}
@@ -335,7 +348,7 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now
 		if (!times[index].valid || !temps[index].valid)
 			continue;
 		tm local{};
-		if (!BreakLocalTime(times[index].utc, offsetHours, local))
+		if (!BreakLocalTime(times[index].utc, offsetSeconds, local))
 			continue;
 		int dateKey = (local.tm_year + 1900) * 1000 + local.tm_yday;
 		int hour = local.tm_hour;
@@ -363,14 +376,14 @@ ForecastCache ParseForecast(const std::string& body, int offsetHours, time_t now
 	NumberValue currentTemp = FirstNumber(current, "temperature_2m", "temperature");
 	NumberValue currentCode = FirstNumber(current, "weather_code", "weathercode");
 	if (currentTemp.valid) {
-		Instant currentTime = ParseInstantField(current, "time", offsetHours);
+		Instant currentTime = ParseInstantField(current, "time", offsetSeconds);
 		time_t stamp = currentTime.valid ? currentTime.utc : time(nullptr);
-		int dateKey = DateKeyFromUtc(stamp, offsetHours);
+		int dateKey = DateKeyFromUtc(stamp, offsetSeconds);
 		DayForecast* day = slotFor(dateKey);
 		if (day) {
 			EnsureDay(*day, dateKey);
 			tm local{};
-			if (BreakLocalTime(stamp, offsetHours, local) && local.tm_hour >= 0 && local.tm_hour <= 23 && !day->hours[local.tm_hour].valid) {
+			if (BreakLocalTime(stamp, offsetSeconds, local) && local.tm_hour >= 0 && local.tm_hour <= 23 && !day->hours[local.tm_hour].valid) {
 				int code = currentCode.valid ? (int)currentCode.value : -1;
 				code = NightCode(code, local.tm_hour, day->sunriseHour, day->sunsetHour);
 				StoreHour(*day, local.tm_hour, currentTemp.value, code);
@@ -445,7 +458,9 @@ std::string HttpGet(const std::wstring& url) {
 	std::string body;
 	body.reserve(64 * 1024);
 	char chunk[8192];
+	ULONGLONG deadline = GetTickCount64() + 20000;
 	for (;;) {
+		if (GetTickCount64() > deadline) throw std::runtime_error("request deadline");
 		DWORD read = 0;
 		if (!WinHttpReadData(request.handle, chunk, sizeof(chunk), &read)) {
 			char message[64];
@@ -465,39 +480,49 @@ std::string HttpGet(const std::wstring& url) {
 	if (status != 200) {
 		char message[64];
 		sprintf_s(message, "weather server returned %lu", status);
-		throw std::runtime_error(message);
+		throw WeatherHttpError(message);
 	}
-	if (body.empty() || body[0] != '{')
-		throw std::runtime_error("weather response was not json");
 	return body;
 }
 
 }
 
-bool BreakLocalTime(time_t utc, int offsetHours, tm& local) {
-	long long shifted = (long long)utc + (long long)offsetHours * 3600LL;
+std::string WeatherHttpGet(const std::wstring& url) { return HttpGet(url); }
+
+std::wstring FormatUtcOffset(int seconds) {
+	wchar_t text[24]{};
+	swprintf_s(text, L"UTC%c%02d:%02d", seconds < 0 ? L'-' : L'+', abs(seconds) / 3600, abs(seconds) % 3600 / 60);
+	return text;
+}
+
+ForecastCache Weather::Fetch() const {
+	return ParseLocationForecast(HttpGet(base));
+}
+
+bool BreakLocalTime(time_t utc, int offsetSeconds, tm& local) {
+	long long shifted = (long long)utc + (long long)offsetSeconds;
 	time_t localUtc = (time_t)shifted;
 	return gmtime_s(&local, &localUtc) == 0;
 }
 
-int DateKeyFromUtc(time_t utc, int offsetHours) {
+int DateKeyFromUtc(time_t utc, int offsetSeconds) {
 	tm local{};
-	if (!BreakLocalTime(utc, offsetHours, local))
+	if (!BreakLocalTime(utc, offsetSeconds, local))
 		return -1;
 	return (local.tm_year + 1900) * 1000 + local.tm_yday;
 }
 
-time_t NextHourUtc(time_t now, int offsetHours) {
-	long long offset = (long long)offsetHours * 3600LL;
+time_t NextHourUtc(time_t now, int offsetSeconds) {
+	long long offset = (long long)offsetSeconds;
 	long long localNow = (long long)now + offset;
 	long long nextLocal = (FloorDiv(localNow, 3600LL) + 1) * 3600LL;
 	return (time_t)(nextLocal - offset);
 }
 
-time_t NextScheduleUtc(time_t now, int offsetHours, const int* hours, int hourCount, int delaySeconds) {
+time_t NextScheduleUtc(time_t now, int offsetSeconds, const int* hours, int hourCount, int delaySeconds) {
 	if (!hours || hourCount <= 0)
 		return now + 6 * 3600;
-	long long offset = (long long)offsetHours * 3600LL;
+	long long offset = (long long)offsetSeconds;
 	long long localNow = (long long)now + offset;
 	long long dayIndex = FloorDiv(localNow, 86400LL);
 	long long best = LLONG_MAX;
@@ -516,17 +541,70 @@ time_t NextScheduleUtc(time_t now, int offsetHours, const int* hours, int hourCo
 	return (time_t)best;
 }
 
-void Weather::SetURL(std::wstring url) {
-	base = std::move(url);
-	// 展示用地址继续保持简短；附加数据与温度共用请求和刷新周期。
-	size_t hourly = base.find(L"hourly=");
-	if (hourly != std::wstring::npos)
-		base.insert(hourly + 7, L"uv_index,wind_direction_10m,wind_speed_10m,relative_humidity_2m,apparent_temperature,precipitation_probability,");
-	size_t daily = base.find(L"daily=");
-	if (daily != std::wstring::npos) base.insert(daily + 6, L"weather_code,");
-	else base += L"&daily=weather_code";
-	base += L"&wind_speed_unit=ms";
+namespace {
+std::wstring DecodeParameter(const std::wstring& value) {
+	std::wstring decoded;
+	auto hex = [](wchar_t c) { return c >= L'0' && c <= L'9' ? c-L'0' : c >= L'A' && c <= L'F' ? c-L'A'+10 : c >= L'a' && c <= L'f' ? c-L'a'+10 : -1; };
+	for (size_t i = 0; i < value.size(); ++i) {
+		if (value[i] == L'%' && i+2 < value.size() && hex(value[i+1]) >= 0 && hex(value[i+2]) >= 0) { decoded += static_cast<wchar_t>(hex(value[i+1])*16+hex(value[i+2])); i += 2; }
+		else decoded += value[i] == L'+' ? L' ' : value[i];
+	}
+	return decoded;
 }
+std::wstring WithForecastTimezone(const std::wstring& input) {
+	// Normalize only timezone in the actual request. Last nonempty duplicate wins; stored URL is untouched.
+	size_t fragment = input.find(L'#'); std::wstring url = input.substr(0, fragment);
+	size_t question = url.find(L'?');
+	std::wstring head = url.substr(0, question), query = question == std::wstring::npos ? L"" : url.substr(question+1);
+	std::vector<std::wstring> parameters; std::wstring timezone;
+	for (size_t begin = 0; begin <= query.size();) {
+		size_t end = query.find(L'&', begin); if (end == std::wstring::npos) end = query.size();
+		std::wstring pair = query.substr(begin,end-begin); size_t equal = pair.find(L'=');
+		if (DecodeParameter(pair.substr(0,equal)) == L"timezone") {
+			std::wstring value = equal == std::wstring::npos ? L"" : pair.substr(equal+1);
+			if (DecodeParameter(value).find_first_not_of(L" \t\r\n") != std::wstring::npos) timezone = value;
+		} else if (!pair.empty()) parameters.push_back(pair);
+		if (end == query.size()) break;
+		begin = end+1;
+	}
+	std::wstring result = head + L"?";
+	for (const auto& pair : parameters) result += pair + L"&";
+	return result + L"timezone=" + (timezone.empty() ? L"auto" : timezone);
+}
+void AddForecastFields(std::wstring& url, const wchar_t* key, const std::vector<std::wstring>& required) {
+ std::wstring parameter = std::wstring(key) + L"=";
+ size_t begin = url.find(L"?" + parameter);
+ if (begin == std::wstring::npos) begin = url.find(L"&" + parameter);
+ if (begin == std::wstring::npos) {
+  url += (url.find(L'?') == std::wstring::npos ? L"?" : L"&") + parameter;
+  begin = url.size();
+ } else begin += parameter.size() + 1;
+ size_t end = url.find(L'&', begin);
+ if (end == std::wstring::npos) end = url.size();
+ std::wstring fields = url.substr(begin, end - begin);
+ for (const auto& field : required) {
+  std::wstring tokens = L"," + fields + L",";
+  if (tokens.find(L"," + field + L",") == std::wstring::npos) {
+   if (!fields.empty()) fields += L",";
+   fields += field;
+  }
+ }
+ url.replace(begin, end - begin, fields);
+}
+}
+std::wstring PrepareForecastUrl(std::wstring base) {
+ base = WithForecastTimezone(base);
+ // One field list serves generated and advanced URLs; unrelated query parameters stay intact.
+ AddForecastFields(base, L"hourly", {L"temperature_2m", L"weather_code", L"uv_index", L"wind_direction_10m", L"wind_speed_10m", L"relative_humidity_2m", L"apparent_temperature", L"precipitation_probability"});
+ AddForecastFields(base, L"daily", {L"temperature_2m_max", L"temperature_2m_min", L"sunrise", L"sunset", L"weather_code"});
+ size_t unit=base.find(L"&wind_speed_unit=");
+ if (unit==std::wstring::npos) base+=L"&wind_speed_unit=ms";
+ else {size_t end=base.find(L'&',unit+1); base.replace(unit,(end==std::wstring::npos ? base.size() : end)-unit,L"&wind_speed_unit=ms");}
+ return WithForecastTimezone(base);
+}
+
+void Weather::SetURL(std::wstring url) { base = url.empty() ? L"" : PrepareForecastUrl(std::move(url)); }
+ForecastCache ParseLocationForecast(const std::string& body) { return ParseForecast(body, 0, time(nullptr), true); }
 
 bool Weather::HasDay(int dateKey) const {
 	return FindDay(dateKey) != nullptr;
@@ -542,16 +620,16 @@ const DayForecast* Weather::FindDay(int dateKey) const {
 	return nullptr;
 }
 
-void Weather::BeginFetch(HWND hwnd, void* owner, unsigned long long generation, int offsetHours) {
+void Weather::BeginFetch(HWND hwnd, void* owner, unsigned long long generation) {
 	std::wstring url = base;
 	auto result = std::make_unique<FetchResult>();
 	result->owner = owner;
 	result->generation = generation;
 	// 后台线程结束前 DLL 不能卸载；线程创建失败时，捕获对象析构也会归还引用。
 	auto moduleReference = std::make_unique<ModuleReference>();
-	std::thread([moduleReference = std::move(moduleReference), hwnd, offsetHours, url = std::move(url), result = std::move(result)]() mutable {
+	std::thread([moduleReference = std::move(moduleReference), hwnd, url = std::move(url), result = std::move(result)]() mutable {
 		try {
-			result->cache = ParseForecast(HttpGet(url), offsetHours);
+			result->cache = ParseLocationForecast(HttpGet(url));
 			result->ok = result->cache.hasData;
 			if (!result->ok)
 				throw std::runtime_error("forecast did not include today or tomorrow");

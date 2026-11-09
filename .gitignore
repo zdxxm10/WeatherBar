@@ -20,3 +20,6 @@ Win32/
 *.lastcodeanalysissucceeded
 # Local configuration and migration backups
 /*.xml*
+
+# Local UI captures and release preparation files
+/artifacts/

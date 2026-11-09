@@ -173,6 +173,8 @@
     <ClInclude Include="ModuleReference.h" />
     <ClInclude Include="Update.h" />
     <ClInclude Include="Weather.h" />
+    <ClInclude Include="Location.h" />
+    <ClInclude Include="ServiceJson.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CClassFactory.cpp" />
@@ -189,6 +191,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="Weather.cpp" />
+    <ClCompile Include="Location.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="DeskBand.def" />

@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 #include <stdexcept>
+#include <string>
 
 inline void Require(bool condition, const char* message) {
 	if (!condition)
@@ -10,3 +11,13 @@ void TestDisplayResources();
 void FailAllocationAfter(int successfulAllocations);
 void TestSettingsBehavior();
 void TestTooltipAndRequestGeneration();
+
+void TestLocationFeatures();
+
+void TestInlineLocationSettings();
+
+void TestUnselectedLocation();
+
+void TestEmptySettings();
+
+void CaptureSettings(const std::wstring& directory);

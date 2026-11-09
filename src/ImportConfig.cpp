@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "ImportConfig.h"
 #include "LegacyNames.h"
 #include <atlbase.h>
@@ -12,14 +12,6 @@
 #pragma comment(lib, "xmllite.lib")
 
 namespace {
-
-const wchar_t kExampleLatitude[] = L"39.9286";
-const wchar_t kExampleLongitude[] = L"116.4103";
-const wchar_t kDefaultUrl[] =
-	L"https://api.open-meteo.com/v1/forecast?latitude=39.9286&longitude=116.4103"
-	L"&hourly=temperature_2m,weather_code"
-	L"&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset"
-	L"&timezone=Asia%2FShanghai&timeformat=unixtime";
 
 const wchar_t kData[] = L"Data";
 const wchar_t kUrl[] = L"ForecastUrl";
@@ -215,8 +207,23 @@ void ApplyElement(const std::wstring& parent, const std::wstring& name, const At
 	}
 	if (!attrs.has)
 		return;
+	if (parent == L"Location") {
+		if (name == L"Mode") { int mode = 0; if (TryInt(attrs.value, mode) && mode >= 0 && mode <= 3) config.locationMode = static_cast<LocationMode>(mode); }
+		if (name == L"Name") config.locationName = attrs.value;
+		if (name == L"Latitude") config.latitude = attrs.value;
+		if (name == L"Longitude") config.longitude = attrs.value;
+		if (name == L"Timezone") config.locationTimezone = attrs.value;
+		if (name == L"Country") config.searchCountry = attrs.value;
+		if (name == L"CountryCode") config.locationCountryCode = attrs.value;
+		if (name == L"CountryName") config.locationCountry = attrs.value;
+		if (name == L"Admin") config.locationAdmin = attrs.value;
+		return;
+	}
 	if (parent == L"Tooltip") {
 		if (name == L"Enabled") ParseBool(attrs.value, config.tooltipEnabled);
+		// Independent additions default only when absent; never reset saved choices.
+		if (name == L"Refresh") ParseBool(attrs.value, config.tooltipRefresh);
+		if (name == L"Status") ParseBool(attrs.value, config.tooltipStatus);
 		if (name == L"Fields") {
 			int fields = 0;
 			if (TryInt(attrs.value, fields) && fields >= 0) config.tooltipFields = fields & 255u;
@@ -235,9 +242,9 @@ void ApplyElement(const std::wstring& parent, const std::wstring& name, const At
 		config.url = attrs.value;
 	}
 	else if (data && Same(name, kZone, L"时区偏移")) {
-		int value = config.timezoneOffsetHours;
-		if (TryInt(attrs.value, value))
-			config.timezoneOffsetHours = value;
+		// Legacy hour offsets are accepted but never used: all modes read response timezone.
+		int legacyHours = 0;
+		TryInt(attrs.value, legacyHours);
 	}
 	else if (data && Same(name, kDelay, L"错峰秒数")) {
 		int value = config.delaySeconds;
@@ -316,15 +323,19 @@ std::wstring BuildConfigXml(const BandConfig& config) {
 	xml << L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n";
 	xml << L"<WeatherBar version=\"" << kConfigSchemaVersion << L"\">\r\n";
 	xml << L"  <General><Language value=\"" << LanguageCode(config.language) << L"\"/></General>\r\n";
+	xml << L"  <Location><Mode value=\"" << static_cast<int>(config.locationMode) << L"\"/>";
+	for (const auto& field : { std::pair<const wchar_t*, std::wstring>{L"Name", config.locationName}, {L"Latitude", config.latitude}, {L"Longitude", config.longitude}, {L"Timezone", config.locationTimezone}, {L"Country", config.searchCountry}, {L"CountryCode", config.locationCountryCode}, {L"CountryName", config.locationCountry}, {L"Admin", config.locationAdmin} })
+		xml << L"<" << field.first << L" value=\"" << XmlEscape(field.second) << L"\"/>";
+	xml << L"</Location>\r\n";
 	xml << L"  <Tooltip><Enabled value=\"" << (config.tooltipEnabled ? 1 : 0)
-		<< L"\"/><Fields value=\"" << (config.tooltipFields & 255u) << L"\"/></Tooltip>\r\n";
+		<< L"\"/><Fields value=\"" << (config.tooltipFields & 255u) << L"\"/><Refresh value=\"" << (config.tooltipRefresh ? 1 : 0)
+		<< L"\"/><Status value=\"" << (config.tooltipStatus ? 1 : 0) << L"\"/></Tooltip>\r\n";
 	xml << L"  <" << kData << L">\r\n";
 	xml << L"    <!-- Open-Meteo \u63a5\u53e3\u5730\u5740\u3002\u65f6\u95f4\u683c\u5f0f\u987b\u4e3a unixtime\uff0c\u5e76\u5305\u542b\u9010\u5c0f\u65f6\u6e29\u5ea6\u3001\u5929\u6c14\u4ee3\u7801\uff0c\u4ee5\u53ca\u6bcf\u65e5\u6700\u9ad8\u6e29\u3001\u6700\u4f4e\u6e29\u3001\u65e5\u51fa\u548c\u65e5\u843d\u3002 -->\r\n";
-	xml << L"    <!-- \u5730\u5740\u91cc\u7684 timezone \u8981\u548c\u4e0b\u9762\u7684\u65f6\u533a\u504f\u79fb\u4e00\u81f4\uff0c\u5426\u5219\u8de8\u5348\u591c\u5207\u6362\u7684\u65e5\u671f\u4f1a\u4e0d\u51c6\u3002 -->\r\n";
 	xml << L"    <!-- \u8fd9\u91cc\u7c98\u8d34 Open-Meteo \u7ed9\u51fa\u7684\u6574\u6bb5\u5730\u5740\uff0c\u548c\u8bbe\u7f6e\u91cc\u770b\u5230\u7684\u5b8c\u5168\u4e00\u6837\u3002\u7f51\u5740\u91cc\u7684 %2F \u5c31\u662f\u659c\u6760 / \u3002 -->\r\n";
-	xml << L"    <" << kUrl << L"><![CDATA[" << CDataText(config.url) << L"]]></" << kUrl << L">\r\n";
-	xml << L"    <!-- \u76f8\u5bf9 UTC \u7684\u5c0f\u65f6\u504f\u79fb\u3002\u5c0f\u4e8e -12 \u6309 -12\uff0c\u5927\u4e8e 14 \u6309 14\u3002 -->\r\n";
-	xml << L"    <" << kZone << L" value=\"" << config.timezoneOffsetHours << L"\"/>\r\n";
+	if (!config.url.empty())
+		xml << L"    <" << kUrl << L"><![CDATA[" << CDataText(config.url) << L"]]></" << kUrl << L">\r\n";
+
 	xml << L"    <!-- \u5237\u65b0\u949f\u70b9\u56fa\u5b9a\u4e3a 0\u30016\u300112\u300118\u3002\u6539\u8fd9\u91cc\u7684\u6570\u5b57\u4e0d\u4f1a\u6539\u53d8\u7a0b\u5e8f\u3002\u542f\u52a8\u540e\u4f1a\u5148\u7acb\u5373\u53d6\u4e00\u6b21\uff0c\u8fd9\u4e9b\u65f6\u523b\u4e0d\u53d7\u624b\u52a8\u5237\u65b0\u5f71\u54cd\u3002 -->\r\n";
 	xml << L"    <" << kHours << L" value=\"" << XmlEscape(FormatScheduleHours(config.scheduleHours)) << L"\"/>\r\n";
 	xml << L"    <!-- \u9519\u5cf0\u79d2\u6570\u3002\u9ed8\u8ba4 900\uff0c\u5373 15 \u5206\u949f\u3002\u5c0f\u4e8e 0 \u6309 0\uff0c\u5927\u4e8e 1800 \u6309 1800\uff0c\u4e5f\u5c31\u662f\u6700\u957f 30 \u5206\u949f\u3002\u4e0d\u5728\u8bbe\u7f6e\u91cc\u663e\u793a\uff0c\u6539\u8fd9\u4e2a\u6570\u5b57\u4f1a\u751f\u6548\u3002 -->\r\n";
@@ -493,9 +504,10 @@ void AddDefaultIcons(BandConfig& config) {
 		config.icons.push_back({ icon.first, icon.second });
 }
 
-BandConfig DefaultBandConfig() {
+BandConfig DefaultBandConfig(Language initialLanguage) {
 	BandConfig config;
-	config.url = kDefaultUrl;
+	config.language = initialLanguage;
+	// No implicit location: an empty configuration can still save appearance settings.
 	config.scheduleHours = { 0, 6, 12, 18 };
 	config.currentColor = TaskbarContrastColor();
 	AddDefaultIcons(config);
@@ -538,23 +550,14 @@ bool Unreserved(wchar_t ch) {
 }
 
 std::wstring EncodeQuery(const std::wstring& text) {
+	int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+	if (!count && !text.empty()) throw std::runtime_error("invalid Unicode query");
+	std::string utf8(count, '\0');
+	WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), utf8.data(), count, nullptr, nullptr);
 	std::wstring out;
-	for (wchar_t ch : text) {
-		if (Unreserved(ch)) {
-			out.push_back(ch);
-			continue;
-		}
-		char utf8[8]{};
-		int bytes = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, utf8, 8, nullptr, nullptr);
-		if (bytes < 1) {
-			out.push_back(ch);
-			continue;
-		}
-		for (int i = 0; i < bytes; ++i) {
-			wchar_t hex[8];
-			swprintf_s(hex, L"%%%02X", (unsigned char)utf8[i]);
-			out += hex;
-		}
+	for (unsigned char byte : utf8) {
+		if (Unreserved(byte)) out += static_cast<wchar_t>(byte);
+		else { wchar_t hex[4]{}; swprintf_s(hex, L"%%%02X", byte); out += hex; }
 	}
 	return out;
 }
@@ -622,9 +625,9 @@ bool ReadCoordinatePair(const std::wstring& text, std::wstring& latitude, std::w
 }
 
 std::wstring BuildForecastUrl(const std::wstring& latitude, const std::wstring& longitude, const std::wstring& timezone) {
-	std::wstring zone = timezone.empty() ? L"Asia/Shanghai" : timezone;
-	return L"https://api.open-meteo.com/v1/forecast?latitude=" + latitude
-		+ L"&longitude=" + longitude
+	std::wstring zone = timezone.empty() ? L"auto" : timezone;
+	return L"https://api.open-meteo.com/v1/forecast?latitude=" + EncodeQuery(latitude)
+		+ L"&longitude=" + EncodeQuery(longitude)
 		+ L"&hourly=temperature_2m,weather_code"
 		+ L"&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset"
 		+ L"&timezone=" + EncodeQuery(zone)
@@ -634,13 +637,13 @@ std::wstring BuildForecastUrl(const std::wstring& latitude, const std::wstring& 
 bool CanonicalForecastUrl(const std::wstring& input, std::wstring& url, std::wstring& error) {
 	std::wstring text = Trim(input);
 	if (text.empty()) {
-		error = std::wstring(L"请填写接口地址，或只填纬度和经度，例如 ") + kExampleLatitude + L", " + kExampleLongitude + L"。";
+		error = L"请填写 Open-Meteo 地址或 WGS84 纬度、经度。";
 		return false;
 	}
 	std::wstring latitude;
 	std::wstring longitude;
 	if (ReadCoordinatePair(text, latitude, longitude)) {
-		url = BuildForecastUrl(latitude, longitude, L"Asia/Shanghai");
+		url = BuildForecastUrl(latitude, longitude, L"auto");
 		error.clear();
 		return true;
 	}
@@ -652,12 +655,12 @@ bool CanonicalForecastUrl(const std::wstring& input, std::wstring& url, std::wst
 	QueryPair(query, L"latitude", latitude);
 	QueryPair(query, L"longitude", longitude);
 	if (latitude.empty() || longitude.empty()) {
-		error = std::wstring(L"认不出纬度和经度。可以粘贴 Open-Meteo 网页上的整段地址，或只填 ") + kExampleLatitude + L", " + kExampleLongitude + L"。";
+		error = L"认不出纬度和经度，请检查 Open-Meteo 地址或 WGS84 坐标。";
 		return false;
 	}
 	std::wstring timezone;
 	QueryPair(query, L"timezone", timezone);
-	url = BuildForecastUrl(latitude, longitude, timezone);
+	url = text.rfind(L"https://api.open-meteo.com/v1/forecast?", 0) == 0 ? text : BuildForecastUrl(latitude, longitude, timezone);
 	error.clear();
 	return true;
 }
@@ -668,10 +671,10 @@ void NormalizeBandConfig(BandConfig& config) {
 	if (CanonicalForecastUrl(config.url, canonical, error))
 		config.url = canonical;
 	else if (Trim(config.url).empty())
-		config.url = kDefaultUrl;
+		config.url.clear();
 	else
 		config.url = Trim(config.url);
-	config.timezoneOffsetHours = ClampInt(config.timezoneOffsetHours, kTimezoneMin, kTimezoneMax);
+	if (config.url.empty()) config.locationMode = LocationMode::None;
 	config.scheduleHours = { 0, 6, 12, 18 };
 	config.delaySeconds = ClampInt(config.delaySeconds, kDelayMin, kDelayMax);
 }
@@ -699,6 +702,12 @@ BandConfig LoadBandConfig() {
 		config.canSave = false;
 		return config;
 	}
+	// Only a missing configuration gets the new large defaults; existing files keep their old fallback sizes.
+    config.iconLevel=config.maxLevel=config.minLevel=config.gapIconLevel=config.gapExtremeLevel=SizeLevel::Medium;
+	// Older files with a URL remain custom locations; missing data never implies a default city.
+	config.locationMode = LocationMode::Custom;
+	config.locationName.clear(); config.latitude.clear(); config.longitude.clear(); config.locationTimezone.clear(); config.searchCountry.clear();
+	config.url.clear();
 	// 新档位优先于旧像素值；状态只属于本次读取，避免多个天气条互相干扰。
 	LevelSeen levelSeen;
 	config.icons.clear();
@@ -752,6 +761,30 @@ BandConfig LoadBandConfig() {
 		fallback.canSave = false;
 		return fallback;
 	}
+	if (config.url.empty()) config.url = config.locationMode != LocationMode::Custom && !config.latitude.empty() && !config.longitude.empty()
+		? BuildForecastUrl(config.latitude, config.longitude, config.locationMode == LocationMode::Coordinates || config.locationTimezone.empty() ? L"auto" : config.locationTimezone) : L"";
+	if (config.url.empty()) config.locationMode = LocationMode::None;
+	if (config.locationMode == LocationMode::Search && config.locationCountryCode.empty()) {
+		// Old search names used separate "name · country · admin (coordinates)" components.
+		// Migrate only an exact country component, never arbitrary address substrings.
+		size_t first = config.locationName.find(L" · "), coordinates = config.locationName.rfind(L" (");
+		if (first != std::wstring::npos && coordinates != std::wstring::npos && coordinates > first) {
+			size_t end = config.locationName.find(L" · ", first + 3);
+			if (end == std::wstring::npos || end > coordinates) end = coordinates;
+			std::wstring country = config.locationName.substr(first + 3, end - first - 3);
+			const std::pair<const wchar_t*, const wchar_t*> aliases[] = {
+				{L"台湾",L"TW"}, {L"Taiwan",L"TW"}, {L"Taiwan, China",L"TW"}, {L"中国台湾",L"TW"},
+				{L"香港",L"HK"}, {L"Hong Kong",L"HK"}, {L"Hong Kong, China",L"HK"}, {L"中国香港",L"HK"},
+				{L"澳门",L"MO"}, {L"澳門",L"MO"}, {L"Macao",L"MO"}, {L"Macau",L"MO"}, {L"マカオ",L"MO"}, {L"Macao, China",L"MO"}, {L"中国澳门",L"MO"}, {L"中国マカオ",L"MO"}
+			};
+			for (const auto& alias : aliases) if (country == alias.first) {
+				config.locationCountryCode = alias.second; config.locationCountry = country;
+				if (end < coordinates) config.locationAdmin = config.locationName.substr(end + 3, coordinates - end - 3);
+				config.locationName.resize(first);
+				break;
+			}
+		}
+	}
 	// v2 bit 0 controlled today extremes; migrate once, preserving v3 choices.
 	if (sourceVersion < 3) config.tooltipFields = (config.tooltipFields & 126u) | ((config.tooltipFields & 1u) ? 129u : 0u);
 	config.schemaVersion = sourceVersion > kConfigSchemaVersion ? sourceVersion : kConfigSchemaVersion;
@@ -761,13 +794,15 @@ BandConfig LoadBandConfig() {
 	int delayBeforeClamp = config.delaySeconds;
 	std::wstring urlBefore = config.url;
 	NormalizeBandConfig(config);
+	std::wstring checkedUrl, checkedError;
+	if (!config.url.empty() && !CanonicalForecastUrl(config.url, checkedUrl, checkedError)) {
+		config.canSave = false; config.locationMode = LocationMode::None;
+	}
 	reader.Release();
 	stream.Release();
 	if (config.canSave && (legacyFile || sourceVersion < kConfigSchemaVersion || !languageSeen || delayBeforeClamp != config.delaySeconds || legacyUrl || urlBefore != config.url)) {
-		// 先保留迁移前原件；新版默认值填补缺项，旧值已在读取时覆盖默认值。
-		std::wstring backup = sourcePath + L".before-v" + std::to_wstring(kConfigSchemaVersion) + L".bak";
-		if (CopyFileW(sourcePath.c_str(), backup.c_str(), TRUE) || GetLastError() == ERROR_FILE_EXISTS)
-			SaveBandConfig(config);
+		// 原子保存失败时保留原配置；迁移不再生成额外备份文件。
+		SaveBandConfig(config);
 	}
 	return config;
 }

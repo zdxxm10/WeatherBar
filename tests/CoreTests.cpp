@@ -1,4 +1,4 @@
-#include "TestSupport.h"
+﻿#include "TestSupport.h"
 #include <windows.h>
 #include <atlbase.h>
 #include <shlwapi.h>
@@ -45,6 +45,7 @@ int TestClose(FILE* file) {
 #include "../src/Update.h"
 #include "../src/DeskBand.h"
 #include "../src/Settings.h"
+#include "../src/Location.h"
 
 std::atomic<long> moduleLocks{ 0 };
 void LockModule(BOOL lock) {
@@ -65,10 +66,13 @@ void WriteConfigText(const std::string& text) {
 
 void TestDefaultsAndRoundTrip() {
 	DeleteFileW(ConfigFilePath().c_str());
+    auto fresh=LoadBandConfig();Require(fresh.currentLevel==SizeLevel::Large && fresh.iconLevel==SizeLevel::Large && fresh.maxLevel==SizeLevel::Large && fresh.minLevel==SizeLevel::Large && fresh.gapIconLevel==SizeLevel::Large && fresh.gapExtremeLevel==SizeLevel::Large,"missing file loads maximum defaults");
 	BandConfig config = DefaultBandConfig();
 	Require(config.scheduleHours == std::vector<int>({ 0, 6, 12, 18 }), "default schedule");
-	Require(config.delaySeconds == 900 && config.timezoneOffsetHours == 8, "default delay and timezone");
-	Require(config.tooltipEnabled && config.tooltipFields == 0, "default tooltip only shows fixed refresh and status");
+	Require(config.delaySeconds == 900 && config.locationMode == LocationMode::None && config.url.empty(), "default delay and empty location");
+	Require(config.tooltipEnabled && config.tooltipFields == 129 && config.tooltipRefresh && !config.tooltipStatus, "default tooltip selects future days and successful refresh");
+    Require(config.currentLevel==SizeLevel::Large && config.iconLevel==SizeLevel::Large && config.maxLevel==SizeLevel::Large && config.minLevel==SizeLevel::Large && config.gapIconLevel==SizeLevel::Large && config.gapExtremeLevel==SizeLevel::Large,"new configuration has six maximum size and spacing defaults");
+    config.currentLevel=SizeLevel::Small;config.iconLevel=SizeLevel::Medium;config.maxLevel=SizeLevel::Small;config.minLevel=SizeLevel::Medium;config.gapIconLevel=SizeLevel::Small;config.gapExtremeLevel=SizeLevel::Medium;
 	config.currentColor = RGB(12, 34, 56);
 	config.showMin = false;
 	config.tooltipEnabled = false; config.tooltipFields = 85;
@@ -78,6 +82,7 @@ void TestDefaultsAndRoundTrip() {
 	std::string bytes = ReadConfigBytes();
 	Require(bytes.starts_with("\xEF\xBB\xBF"), "UTF-8 BOM must be preserved");
 	BandConfig loaded = LoadBandConfig();
+    Require(loaded.currentLevel==SizeLevel::Small && loaded.iconLevel==SizeLevel::Medium && loaded.maxLevel==SizeLevel::Small && loaded.minLevel==SizeLevel::Medium && loaded.gapIconLevel==SizeLevel::Small && loaded.gapExtremeLevel==SizeLevel::Medium,"explicit existing six levels survive reload");
 	Require(loaded.url == config.url && loaded.currentColor == config.currentColor, "URL and color round trip");
 	Require(!loaded.tooltipEnabled && loaded.tooltipFields == 85, "tooltip settings round trip");
 	Require(loaded.icons == config.icons && !loaded.showMin && loaded.delaySeconds == 123, "Unicode icon names and hidden/stagger settings round trip");
@@ -85,6 +90,9 @@ void TestDefaultsAndRoundTrip() {
 }
 
 void TestLanguageAndMigration() {
+ WriteConfigText("<WeatherBar version=\"5\"><General><Language value=\"en\"/></General></WeatherBar>");
+ auto existing=LoadBandConfig();Require(existing.currentLevel==SizeLevel::Large && existing.iconLevel==SizeLevel::Medium && existing.maxLevel==SizeLevel::Medium && existing.minLevel==SizeLevel::Medium && existing.gapIconLevel==SizeLevel::Medium && existing.gapExtremeLevel==SizeLevel::Medium,"existing files keep old absent-field defaults");
+
 	Require(LanguageForLocale(L"zh-CN") == Language::Chinese && LanguageForLocale(L"zh-SG") == Language::Chinese, "simplified Chinese locales");
 	Require(LanguageForLocale(L"ja-JP") == Language::Japanese && LanguageForLocale(L"en-GB") == Language::English, "Japanese and English locales");
 	Require(LanguageForLocale(L"zh-TW") == Language::Chinese && LanguageForLocale(L"zh-HK") == Language::Chinese, "Chinese regions use simplified Chinese text");
@@ -94,17 +102,19 @@ void TestLanguageAndMigration() {
 		config.language = language;
 		Require(SaveBandConfig(config) && LoadBandConfig().language == language, "language round trip");
 	}
-	DeleteFileW((ConfigFilePath() + L".before-v3.bak").c_str());
+	DeleteFileW((ConfigFilePath() + L".before-v5.bak").c_str());
 	std::string old = R"(<WeatherBar><Data><ForecastUrl value="39.9286, 116.4103"/><StaggerSeconds value="73"/></Data><Current><Color value="123456"/></Current><Icon key="0" filename="my-sun"/></WeatherBar>)";
 	WriteConfigText(old);
 	BandConfig migrated = LoadBandConfig();
-	Require(migrated.tooltipEnabled && migrated.tooltipFields == 0, "old configuration without tooltip fields uses new defaults");
+	Require(migrated.tooltipEnabled && migrated.tooltipFields == 129, "old configuration without tooltip fields uses new defaults");
 	Require(migrated.language == Language::System && migrated.delaySeconds == 73 && FormatColorText(migrated.currentColor) == L"123456", "migration retains user values and fills defaults");
 	Require(migrated.icons[0].second == L"my-sun", "custom icon mapping is retained");
 	Require(ReadConfigBytes().find("<Language") != std::string::npos, "missing language is added to old configuration");
-	std::ifstream backup(std::filesystem::path(ConfigFilePath() + L".before-v3.bak"), std::ios::binary);
-	std::string backupBytes{ std::istreambuf_iterator<char>(backup), std::istreambuf_iterator<char>() };
-	Require(backupBytes == old, "migration backup is an exact copy");
+	Require(GetFileAttributesW((ConfigFilePath() + L".before-v5.bak").c_str()) == INVALID_FILE_ATTRIBUTES, "migration creates no backup");
+	WriteConfigText(old);
+	writeFault = WriteFault::ShortBodyWrite;
+	Require(LoadBandConfig().canSave && ReadConfigBytes() == old, "failed migration save preserves original XML without backup");
+	Require(GetFileAttributesW((ConfigFilePath() + L".before-v5.bak").c_str()) == INVALID_FILE_ATTRIBUTES, "failed migration creates no backup");
 	for (const std::string& invalid : { std::string("<WeatherBar><Data>"), std::string("<OtherApp/>"), std::string("<WeatherBar version=\"invalid\"/>") }) {
 		WriteConfigText(invalid);
 		BandConfig config = LoadBandConfig();
@@ -121,7 +131,7 @@ void TestLanguageAndMigration() {
 void TestRenamedConfiguration() {
 	DeleteFileW(ConfigFilePath().c_str());
 	std::wstring oldPath = ModuleDirectory() + L"\\" + kLegacyConfigFile;
-	std::wstring backupPath = oldPath + L".before-v3.bak";
+	std::wstring backupPath = oldPath + L".before-v5.bak";
 	DeleteFileW(backupPath.c_str());
 	std::string root = WideToUtf8(kLegacyConfigRoot);
 	std::string original = "<" + root + R"( version="2"><General><Language value="ja"/></General><Current><Color value="123456"/></Current></)" + root + ">";
@@ -129,6 +139,7 @@ void TestRenamedConfiguration() {
 	BandConfig migrated = LoadBandConfig();
 	Require(migrated.language == Language::Japanese && FormatColorText(migrated.currentColor) == L"123456", "renaming retains legacy configuration values");
 	Require(ReadConfigBytes().find("<WeatherBar") != std::string::npos, "migration creates new branded configuration");
+	Require(GetFileAttributesW(backupPath.c_str()) == INVALID_FILE_ATTRIBUTES, "legacy name migration creates no extra backup");
 	{ std::ifstream file(std::filesystem::path(oldPath), std::ios::binary); std::string bytes{ std::istreambuf_iterator<char>(file), {} }; Require(bytes == original, "legacy source remains untouched"); }
 	WriteConfigText("<Broken");
 	Require(!LoadBandConfig().canSave && ReadConfigBytes() == "<Broken", "damaged new file does not silently fall back to legacy values");
@@ -164,7 +175,7 @@ void TestUpdateClassification() {
 void TestLegacyConfig() {
 	WriteConfigText(R"(<WeatherBar><数据><接口地址 value="39.9286, 116.4103"/><时区偏移 value="99"/><错峰秒数 value="1900"/></数据><图标><档位 value="中"/><边长 value="48"/></图标><当前温度><字号 value="8"/><档位 value="大"/></当前温度><间距><档位 value="小"/></间距><Icon key="-1" filename="None"/></WeatherBar>)");
 	BandConfig config = LoadBandConfig();
-	Require(config.timezoneOffsetHours == 14 && config.delaySeconds == 1800, "legacy bounds normalization");
+	Require(config.delaySeconds == 1800, "legacy bounds normalization");
 	Require(config.iconLevel == SizeLevel::Medium && config.currentLevel == SizeLevel::Large, "new levels must take precedence over legacy pixel sizes");
 	Require(config.gapIconLevel == SizeLevel::Small && config.gapExtremeLevel == SizeLevel::Small, "legacy shared spacing");
 	Require(ReadConfigBytes().find("<![CDATA[") != std::string::npos, "legacy URL must migrate to CDATA");
@@ -174,6 +185,9 @@ void TestLegacyConfig() {
 
 void TestConfigWriteFailure(WriteFault fault) {
 	BandConfig config = DefaultBandConfig();
+	config.locationMode = LocationMode::Coordinates; config.latitude = L"27.7172"; config.longitude = L"85.324";
+	config.locationName = L"manual location"; config.locationTimezone = L"Asia/Kathmandu";
+	config.url = BuildForecastUrl(config.latitude, config.longitude, L"auto");
 	Require(SaveBandConfig(config), "save old config before injecting failure");
 	std::string oldBytes = ReadConfigBytes();
 	config.delaySeconds = 42;
@@ -236,23 +250,27 @@ time_t UtcTime(int year, int month, int day, int hour = 0, int minute = 0) {
 void TestSchedule() {
 	const int hours[] = { 0, 6, 12, 18 };
 	time_t now = UtcTime(2026, 12, 31, 16);
-	Require(NextScheduleUtc(now, 8, hours, 4, 900) == now + 900, "UTC+8 midnight stagger");
-	Require(NextScheduleUtc(now + 900, 8, hours, 4, 900) == now + 6 * 3600 + 900, "exact update time must advance to next slot");
-	Require(NextHourUtc(now, 8) == now + 3600, "exact hour must advance");
-	Require(NextHourUtc(now + 1, -12) == now + 3600, "negative timezone");
-	Require(NextScheduleUtc(now, 14, nullptr, 0, 0) == now + 6 * 3600, "empty schedule fallback");
-	Require(DateKeyFromUtc(now, 8) == DateKeyFromUtc(UtcTime(2027, 1, 1), 0), "new year timezone rollover");
+	Require(NextScheduleUtc(now, 8 * 3600, hours, 4, 900) == now + 900, "UTC+8 midnight stagger");
+	Require(NextScheduleUtc(now + 900, 8 * 3600, hours, 4, 900) == now + 6 * 3600 + 900, "exact update time must advance to next slot");
+	Require(NextHourUtc(now, 8 * 3600) == now + 3600, "exact hour must advance");
+	Require(NextHourUtc(now + 1, -12 * 3600) == now + 3600, "negative timezone");
+	Require(NextScheduleUtc(now, 14 * 3600, nullptr, 0, 0) == now + 6 * 3600, "empty schedule fallback");
+	Require(DateKeyFromUtc(now, 8 * 3600) == DateKeyFromUtc(UtcTime(2027, 1, 1), 0), "new year timezone rollover");
 	Require(NextHourUtc(-1, 0) == 0, "floor division before Unix epoch");
+	tm fractional{};
+	Require(BreakLocalTime(UtcTime(2026, 12, 31, 18, 30), 20700, fractional) && fractional.tm_year == 127 && fractional.tm_mon == 0 && fractional.tm_mday == 1 && fractional.tm_hour == 0 && fractional.tm_min == 15, "quarter-hour timezone crosses year and matches local clock");
+	Require(NextHourUtc(UtcTime(2026, 12, 31, 18, 30), 20700) == UtcTime(2026, 12, 31, 19, 15), "quarter-hour timezone next local hour");
+	Require(DateKeyFromUtc(UtcTime(2027, 1, 1, 2, 45), -12600) == DateKeyFromUtc(UtcTime(2026, 12, 31), 0), "negative half-hour offset previous local date");
 }
 
 void TestFutureForecast() {
 	for (time_t now : { UtcTime(2026, 1, 31, 23), UtcTime(2026, 12, 31, 23) }) {
 		std::string body = "{\"daily\":{\"time\":[" + std::to_string(now) + "," + std::to_string(now + 86400) + "," + std::to_string(now + 172800) + "],\"weather_code\":[0,63,99],\"temperature_2m_min\":[1,null,3],\"temperature_2m_max\":[10,20]}}";
-		auto cache = ParseForecast(body, 8, now);
-		for (int i = 0; i < 3; ++i) Require(cache.days[i].dateKey == DateKeyFromUtc(now + i * 86400, 8), "three local dates across month/year boundaries");
+		auto cache = ParseForecast(body, 8 * 3600, now);
+		for (int i = 0; i < 3; ++i) Require(cache.days[i].dateKey == DateKeyFromUtc(now + i * 86400, 8 * 3600), "three local dates across month/year boundaries");
 		Require(cache.days[1].code == 63 && cache.days[1].minTemperature.empty() && cache.days[1].maxTemperature == L"20.0℃", "missing low retains high");
 		Require(cache.days[2].code == 99 && cache.days[2].minTemperature == L"3.0℃" && cache.days[2].maxTemperature.empty(), "short high array retains third day");
-		Require(ParseForecast("{\"daily\":{\"time\":[" + std::to_string(now) + "],\"temperature_2m_max\":[1]}}", 8, now).days[0].code == -1, "absent code stays unknown");
+		Require(ParseForecast("{\"daily\":{\"time\":[" + std::to_string(now) + "],\"temperature_2m_max\":[1]}}", 8 * 3600, now).days[0].code == -1, "absent code stays unknown");
 	}
 	for (Language language : { Language::Chinese, Language::English, Language::Japanese }) {
 		for (int code : {51,53,55,61,63,65,80,81,82}) Require(std::wstring(DailyWeatherText(code, language)) == DailyWeatherText(61, language), "rain grouping");
@@ -269,6 +287,20 @@ void TestFutureForecast() {
 		BandConfig config = DefaultBandConfig(); config.tooltipFields = fields;
 		Require(SaveBandConfig(config) && LoadBandConfig().tooltipFields == fields, "v3 independent choices survive reload");
 	}
+}
+
+void TestTooltipCompatibility() {
+ for (unsigned fields : {0u, 1u, 128u, 129u, 255u}) {
+  WriteConfigText("<WeatherBar version=\"5\"><General><Language value=\"en\"/></General><Tooltip><Fields value=\"" + std::to_string(fields) + "\"/></Tooltip></WeatherBar>");
+  auto legacy = LoadBandConfig();
+  Require(legacy.tooltipFields == fields && legacy.tooltipRefresh && !legacy.tooltipStatus, "old choices survive with defaults for new fields");
+  for (bool refresh : {false,true}) for (bool status : {false,true}) {
+   legacy.tooltipRefresh=refresh; legacy.tooltipStatus=status; legacy.tooltipEnabled=false;
+   bool saved=SaveBandConfig(legacy);
+   Require(saved, ("save independent tooltip flags (fields="+std::to_string(fields)+", error="+std::to_string(GetLastError())+", canSave="+std::to_string(legacy.canSave)+")").c_str()); auto loaded=LoadBandConfig();
+   Require(loaded.tooltipFields==fields && loaded.tooltipRefresh==refresh && loaded.tooltipStatus==status && !loaded.tooltipEnabled, "all combinations and disabled selections survive reload");
+  }
+ }
 }
 
 void TestForecastParsing() {
@@ -295,7 +327,7 @@ void TestForecastParsing() {
 	point = ParseForecast(extra, 0).days[0].hours[0];
 	Require(point.humidity.empty() && point.precipitationProbability.empty() && point.valid, "optional null and out-of-range values do not discard temperature");
 	Instant instant;
-	Require(InstantFromText("2026-01-01T00:30", 8, instant) && instant.utc == UtcTime(2025, 12, 31, 16, 30), "text timestamp timezone conversion");
+	Require(InstantFromText("2026-01-01T00:30", 8 * 3600, instant) && instant.utc == UtcTime(2025, 12, 31, 16, 30), "text timestamp timezone conversion");
 	bool threw = false;
 	try { ParseForecast("{\"hourly\":{\"time\":[],\"temperature_2m\":[]}}", 0); }
 	catch (const std::runtime_error&) { threw = true; }
@@ -350,7 +382,7 @@ void TestAsyncLifecycle() {
 		bool started = false;
 		FailAllocationAfter(failurePoint);
 		try {
-			weather.BeginFetch(hwnd, &state, 1, 8);
+			weather.BeginFetch(hwnd, &state, 1);
 			started = true;
 		}
 		catch (const std::bad_alloc&) { ++startupFailures; }
@@ -366,7 +398,7 @@ void TestAsyncLifecycle() {
 	}
 	Require(startupFailures > 0 && state.received > 0, "exercise failed and successful thread startup");
 	DestroyWindow(hwnd);
-	weather.BeginFetch(hwnd, &state, 2, 8);
+	weather.BeginFetch(hwnd, &state, 2);
 	Require(PumpUntilIdle(state, state.received), "closed-window delivery failure must release the DLL lock");
 	UnregisterClassW(klass.lpszClassName, g_hinstDll);
 }
@@ -408,6 +440,25 @@ int wmain(int argc, wchar_t** argv) {
 	HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	if (FAILED(initialized))
 		return 2;
+	if(argc>2 && std::wstring(argv[1])==L"--capture-settings") {
+        try { CaptureSettings(argv[2]); CoUninitialize(); return 0; }
+        catch(const std::exception& error){std::cerr<<error.what()<<'\n';CoUninitialize();return 1;}
+    }
+	if (argc > 2 && std::wstring(argv[1]) == L"--check-location") {
+		auto request = StartLocationSearch(argv[2], argc > 3 ? argv[3] : L"", Language::Chinese);
+		while (!request->done.load(std::memory_order_acquire)) Sleep(20);
+		std::cout << "status=" << static_cast<int>(request->status) << " count=" << request->candidates.size() << '\n';
+		for (const auto& item : request->candidates) std::cout << winrt::to_string(item.label) << " timezone=" << winrt::to_string(item.timezone) << '\n';
+		CoUninitialize(); return request->status == LocationStatus::Ready ? 0 : 1;
+	}
+	if (argc > 3 && std::wstring(argv[1]) == L"--check-coordinates") {
+		try {
+			Weather weather; weather.SetURL(BuildForecastUrl(argv[2], argv[3], L"auto"));
+			auto cache = weather.Fetch();
+			std::cout << "timezone=" << winrt::to_string(cache.timezone) << " offset=" << cache.utcOffsetSeconds << " hasData=" << cache.hasData << '\n';
+			CoUninitialize(); return 0;
+		} catch (...) { CoUninitialize(); return 1; }
+	}
 	if (argc > 1 && std::wstring(argv[1]) == L"--check-update") {
 		auto check = StartUpdateCheck();
 		while (!check->done.load(std::memory_order_acquire)) Sleep(20);
@@ -417,8 +468,7 @@ int wmain(int argc, wchar_t** argv) {
 		return check->status == UpdateStatus::Failed ? 1 : 0;
 	}
 	if (argc > 1 && std::wstring(argv[1]) == L"--preview-settings") {
-		BandConfig config = DefaultBandConfig();
-		config.language = argc > 2 ? ParseLanguage(argv[2]) : Language::Chinese;
+		BandConfig config = DefaultBandConfig(argc > 2 ? ParseLanguage(argv[2]) : Language::Chinese);
 		CDeskBand band;
 		HWND hwnd = ShowBandSettings(nullptr, &band, config);
 		ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -445,12 +495,17 @@ int wmain(int argc, wchar_t** argv) {
 	run("URL and color compatibility", TestUrlAndColors);
 	run("schedule and timezone boundaries", TestSchedule);
 	run("forecast parsing and fallback", TestForecastParsing);
+	run("location search, coordinates, timezone and native UI", TestLocationFeatures);
 	run("future dates, codes and configuration", TestFutureForecast);
 	run("async startup, error delivery and closed-window cleanup", TestAsyncLifecycle);
 	run("font and SVG resource reuse", TestDisplayResources);
 	run("localized save, cancel and appearance reset", TestSettingsBehavior);
+	run("inline location and collapsible advanced settings", TestInlineLocationSettings);
 	run("hover status and stale request rejection", TestTooltipAndRequestGeneration);
+	run("tooltip defaults and independent footer persistence", TestTooltipCompatibility);
 	run("packaged DLL and SVG integrity", TestPackagedResources);
+	run("empty settings UI and persistence", TestEmptySettings);
+	run("unselected location, scheduling and rollback", TestUnselectedLocation);
 	run("balanced module references", [] { Require(moduleLocks == 0, "module lock must be balanced"); });
 	CoUninitialize();
 	std::cout << "Failures: " << failures << '\n';

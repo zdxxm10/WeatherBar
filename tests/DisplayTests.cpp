@@ -1,4 +1,4 @@
-#include "TestSupport.h"
+﻿#include "TestSupport.h"
 #include "../src/ImportConfig.h"
 #include "../src/ImageList.h"
 #include "../src/Weather.h"
@@ -69,15 +69,18 @@ void TestTooltipAndRequestGeneration() {
 	band.config.language = Language::English;
 	band.config.tooltipEnabled = true;
 	band.config.tooltipFields = 0;
+	band.config.tooltipRefresh = true; band.config.tooltipStatus = true;
 	band.tooltipHwnd = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_NOPREFIX,
 		0, 0, 0, 0, nullptr, nullptr, g_hinstDll, nullptr);
 	Require(band.tooltipHwnd != nullptr, "native tooltip window for actual font measurements");
+	band.config.locationMode = LocationMode::Custom;
+	band.config.url = BuildForecastUrl(L"35",L"139",L"auto");
 	Require(band.BuildTooltip().find(L"No weather data yet") != std::wstring::npos, "empty hover state");
 	time_t now = time(nullptr);
 	tm local{};
-	Require(BreakLocalTime(now, band.config.timezoneOffsetHours, local), "tooltip local time");
+	Require(BreakLocalTime(now, band.UtcOffsetSeconds(), local), "tooltip local time");
 	auto& day = band._weather.cache.days[0];
-	day.dateKey = DateKeyFromUtc(now, band.config.timezoneOffsetHours);
+	day.dateKey = DateKeyFromUtc(now, band.UtcOffsetSeconds());
 	day.maxTemperature = L"27.0℃";
 	day.minTemperature = L"18.0℃";
 	day.hours[local.tm_hour] = { true, L"23.5℃", 3 };
@@ -98,7 +101,7 @@ void TestTooltipAndRequestGeneration() {
 	}
 	for (int i = 1; i <= 2; ++i) {
 		auto& future = band._weather.cache.days[i];
-		future.dateKey = DateKeyFromUtc(now + i * 86400, band.config.timezoneOffsetHours);
+		future.dateKey = DateKeyFromUtc(now + i * 86400, band.UtcOffsetSeconds());
 		future.code = 2; future.minTemperature = L"13℃"; future.maxTemperature = L"22℃";
 	}
 	band.config.tooltipFields = 1;
@@ -125,15 +128,15 @@ void TestTooltipAndRequestGeneration() {
 		for (unsigned mask = 0; mask < 256; ++mask) {
 			band.config.tooltipFields = mask;
 			std::wstring text = band.BuildTooltip();
-			size_t status = text.rfind(L'\n');
-			size_t refresh = text.rfind(L'\n', status - 1);
-			size_t start = refresh == std::wstring::npos ? 0 : refresh + 1;
-			int limit = measure(text.substr(start, status - start));
-			for (size_t row = 0; row < start;) {
-				size_t end = text.find(L'\n', row);
-				Require(measure(text.substr(row, end - row)) <= limit, "optional tooltip rows fit timestamp width in all languages");
-				row = end + 1;
-			}
+
+   int limit = static_cast<int>(SendMessageW(band.tooltipHwnd, TTM_GETMAXTIPWIDTH, 0, 0)) - 2;
+   size_t footer = text.find(L"\n" + std::wstring(Text(language,L"上次刷新：",L"Last refresh: ",L"最終更新：")));
+   if (footer == std::wstring::npos) footer = 0;
+   for (size_t row = 0; row < footer;) {
+    size_t end = text.find(L'\n', row);
+    Require(measure(text.substr(row, end - row)) <= limit, "optional tooltip rows fit bounded width in all languages");
+    row = end + 1;
+   }
 		}
 		SelectObject(dc, previous); ReleaseDC(band.tooltipHwnd, dc);
 		band.config.tooltipFields = 255;
@@ -145,6 +148,32 @@ void TestTooltipAndRequestGeneration() {
 	Require(band.BuildTooltip().find(L"stale") != std::wstring::npos, "stale forecasts are identified");
 	band.config.language = Language::Japanese;
 	Require(band.BuildTooltip().find(L"予報") != std::wstring::npos, "Japanese hover text");
+
+ band.config.language=Language::English; band.config.tooltipFields=0;
+ for (bool refresh : {false,true}) for (bool status : {false,true}) {
+  band.config.tooltipRefresh=refresh; band.config.tooltipStatus=status;
+  auto text=band.BuildTooltip();
+  Require((text.find(L"Last refresh:")!=std::wstring::npos)==refresh && (text.find(L"Status:")!=std::wstring::npos)==status,"footer combinations are independent");
+  Require(text.empty()==(!refresh && !status),"all unchecked produces no empty popup content");
+  Require(text.empty() || (text.front()!=L'\n' && text.back()!=L'\n' && text.find(L"\n\n")==std::wstring::npos),"no empty separator lines");
+ }
+ band.config.tooltipRefresh=true; band.config.tooltipStatus=false;
+ band.lastSuccessfulFetch=0; Require(band.BuildTooltip()==L"Last refresh: Not refreshed yet","no successful refresh has explicit text");
+ band.lastSuccessfulFetch=now; band._weather.cache.timezoneValid=true;
+ band._weather.cache.utcOffsetSeconds=20700; auto systemStamp=band.BuildTooltip();
+ band._weather.cache.utcOffsetSeconds=-12600;
+ Require(band.BuildTooltip()==systemStamp && systemStamp.find(L"UTC")==std::wstring::npos,"refresh display is independent of weather timezone");
+ ULARGE_INTEGER ticks{};ticks.QuadPart=(static_cast<ULONGLONG>(now)+11644473600ULL)*10000000ULL;
+ FILETIME file{ticks.LowPart,ticks.HighPart}; FILETIME localFile{}; SYSTEMTIME expected{};
+ Require(FileTimeToLocalFileTime(&file,&localFile) && FileTimeToSystemTime(&localFile,&expected),"system timezone reference conversion");
+ wchar_t formatted[40]{}; swprintf_s(formatted,L"%04u-%02u-%02u %02u:%02u",expected.wYear,expected.wMonth,expected.wDay,expected.wHour,expected.wMinute);
+ Require(systemStamp==L"Last refresh: "+std::wstring(formatted),"refresh uses computer local time without offset label");
+ auto accepted=band.lastSuccessfulFetch;
+ band.config.language=Language::Japanese; band.BuildTooltip(); band.config.language=Language::English;
+ Require(band.lastSuccessfulFetch==accepted,"language and rendering never update successful time");
+ band.failedUrl=band.config.url; band.generation=6;
+ auto* failure=new FetchResult();failure->owner=&band;failure->generation=6;failure->ok=false;band.OnWeather(failure);
+ Require(band.lastSuccessfulFetch==accepted,"failed request does not change successful time");
 	band.generation = 7;
 	band.inFlight = true;
 	auto* old = new FetchResult();
@@ -152,5 +181,33 @@ void TestTooltipAndRequestGeneration() {
 	old->generation = 6;
 	old->ok = true;
 	band.OnWeather(old);
-	Require(!band.inFlight && band._weather.cache.hasData, "old requests must finish without replacing the current cache");
+	Require(!band.inFlight && band._weather.cache.hasData && band.lastSuccessfulFetch==accepted, "old requests never replace cache or successful time");
+}
+
+void TestUnselectedLocation() {
+ BandConfig empty = DefaultBandConfig(Language::English);
+ Require(!HasConfiguredLocation(empty) && empty.url.empty() && empty.latitude.empty() && empty.longitude.empty() && empty.locationName.empty() && empty.searchCountry.empty(), "fresh settings have no implicit location");
+ Require(SaveBandConfig(empty), "save empty location with appearance");
+ CDeskBand band;
+ Require(!HasConfiguredLocation(band.config), "restart remains unselected");
+ HWND fixture = CreateWindowExW(0,L"STATIC",L"test",WS_POPUP,0,0,100,100,nullptr,nullptr,g_hinstDll,nullptr);
+ Require(fixture!=nullptr,"isolated scheduling window");
+ band.m_hwnd=fixture;
+ band.StartFetch(); band.ArmTimer(); band.OnTimer();
+ Require(!band.inFlight && !band.followUp && band.armedUntil==0 && !band.armedForSchedule, "unselected refresh and timers never start weather");
+ band.BeginSettingsPreview();
+ auto selected = empty; selected.locationMode=LocationMode::Coordinates; selected.latitude=L"0";selected.longitude=L"0";selected.locationName=L"0, 0";selected.url=BuildForecastUrl(L"0",L"0",L"auto");
+ ForecastCache response; response.hasData=true;response.timezoneValid=true;response.timezone=L"Etc/GMT";response.utcOffsetSeconds=0;
+ band.ApplyPreviewConfig(selected,&response);
+ Require(HasConfiguredLocation(band.config) && band.armedUntil>0,"validated zero coordinates enable scheduling");
+ auto obsoleteGeneration=band.generation;
+ band.CancelSettingsPreview();
+ Require(!HasConfiguredLocation(band.config) && band.armedUntil==0 && !band._weather.cache.hasData && !band._weather.cache.timezoneValid,"cancel first location clears cache and stops schedule");
+ auto* obsolete=new FetchResult();obsolete->owner=&band;obsolete->generation=obsoleteGeneration;obsolete->ok=true;obsolete->cache=response;
+ band.OnWeather(obsolete);
+ Require(!band._weather.cache.hasData && !band.inFlight,"late preview result cannot revive unselected location");
+ band.config.tooltipStatus=true; auto tooltip=band.BuildTooltip();Require(tooltip.find(L"Choose a location")!=std::wstring::npos,"unselected hover guides user to settings");
+ band.m_hwnd=nullptr;DestroyWindow(fixture);
+ Require(SaveBandConfig(selected),"save selected zero-coordinate location");
+ auto restored=LoadBandConfig();Require(restored.url==selected.url && restored.latitude==L"0" && restored.longitude==L"0","saved valid location restores exactly");
 }

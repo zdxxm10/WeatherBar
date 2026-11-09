@@ -33,7 +33,9 @@ public:
 
 	bool ApplySavedConfig(const BandConfig& incoming);
 	void BeginSettingsPreview();
-	void ApplyPreviewConfig(const BandConfig& incoming);
+	void ApplyPreviewConfig(const BandConfig& incoming, const ForecastCache* validated = nullptr);
+	int UtcOffsetSeconds() const { return _weather.cache.utcOffsetSeconds; }
+	const ForecastCache& CurrentForecast() const { return _weather.cache; }
 	void CancelSettingsPreview();
 	const BandConfig& CurrentConfig() const { return config; }
 	void OnSettingsClosed();
